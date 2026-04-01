@@ -13,6 +13,8 @@ from backend.sim_engine import SimEngine
 from backend.ws_manager import WSManager
 from backend.tools.base import ToolRegistry
 from backend.tools.file_manager import FileManagerTool
+from backend.personality import PersonalityEngine
+from backend.relationships import RelationshipEngine
 
 db: Database = None
 pool: AgentPool = None
@@ -20,10 +22,12 @@ orchestrator: Orchestrator = None
 sim: SimEngine = None
 ws_mgr = WSManager()
 sim_task: asyncio.Task = None
+rel_engine: RelationshipEngine = None
+personality_engine: PersonalityEngine = None
 
 
 async def sim_loop():
-    """Main simulation loop — ticks every 5 seconds."""
+    tick_count = 0
     while True:
         try:
             events = await sim.tick()
@@ -33,6 +37,12 @@ async def sim_loop():
                 "type": "state_update",
                 "agents": pool.get_agents_state(),
             })
+            tick_count += 1
+            if tick_count % 60 == 0:
+                for agent in pool.agents:
+                    await db.log_personality_snapshot(
+                        agent.data.id, agent.data.traits, agent.data.mood
+                    )
         except asyncio.CancelledError:
             break
         except Exception as e:
@@ -42,7 +52,7 @@ async def sim_loop():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global db, pool, orchestrator, sim, sim_task
+    global db, pool, orchestrator, sim, sim_task, rel_engine, personality_engine
 
     db = Database(settings.db_path)
     await db.init()
@@ -53,11 +63,15 @@ async def lifespan(app: FastAPI):
     settings.workspace_path.mkdir(parents=True, exist_ok=True)
     tools.register(FileManagerTool(workspace_path=settings.workspace_path))
 
-    pool = AgentPool(llm=llm, db=db, tools=tools)
+    personality_engine = PersonalityEngine()
+    rel_engine = RelationshipEngine(db)
+
+    pool = AgentPool(llm=llm, db=db, tools=tools, personality_engine=personality_engine)
     await pool.save_all()
 
-    orchestrator = Orchestrator(pool=pool, db=db, llm=llm)
-    sim = SimEngine(agents=pool.agents, llm=llm)
+    orchestrator = Orchestrator(pool=pool, db=db, llm=llm, relationship_engine=rel_engine)
+    sim = SimEngine(agents=pool.agents, llm=llm,
+                    relationship_engine=rel_engine, personality_engine=personality_engine)
 
     sim_task = asyncio.create_task(sim_loop())
 
@@ -131,6 +145,18 @@ async def create_task(title: str, description: str = "", project: str | None = N
 @app.get("/api/agents")
 async def get_agents():
     return pool.get_agents_state()
+
+
+@app.get("/api/duos")
+async def get_duos():
+    duos = await rel_engine.detect_duos()
+    return {"duos": duos}
+
+
+@app.get("/api/relationships/{agent_id}")
+async def get_relationships(agent_id: str):
+    rels = await db.get_relationships_for(agent_id)
+    return [r.model_dump() for r in rels]
 
 
 if __name__ == "__main__":

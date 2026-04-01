@@ -5,6 +5,7 @@ from backend.models import (
 from backend.llm_client import LLMClient
 from backend.database import Database
 from backend.tools.base import ToolRegistry
+from backend.personality import PersonalityEngine
 
 TEAM = [
     {"id": "pm", "name": "Star", "role": AgentRole.PM,
@@ -32,15 +33,16 @@ TEAM = [
 
 
 class AgentPool:
-    def __init__(self, llm: LLMClient, db: Database, tools: ToolRegistry):
+    def __init__(self, llm: LLMClient, db: Database, tools: ToolRegistry, personality_engine: PersonalityEngine | None = None):
         self.agents: list[Agent] = []
+        pe = personality_engine or PersonalityEngine()
         for spec in TEAM:
             data = AgentData(
                 id=spec["id"], name=spec["name"], role=spec["role"],
                 state=AgentState.IDLE_SIT, position=spec["position"],
                 traits=spec["traits"], mood=AgentMood(),
             )
-            self.agents.append(Agent(data=data, llm=llm, db=db, tools=tools))
+            self.agents.append(Agent(data=data, llm=llm, db=db, tools=tools, personality_engine=pe))
 
     def get_agent(self, agent_id: str) -> Agent | None:
         for a in self.agents:
