@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Falkenstein — KI Büro</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #1a1a2e;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+            font-family: 'Courier New', monospace;
+            color: #eee;
+        }
+        h1 {
+            margin: 16px 0 8px;
+            font-size: 18px;
+            color: #ffd700;
+            letter-spacing: 2px;
+        }
+        #game-container {
+            border: 2px solid #333;
+            border-radius: 4px;
+        }
+        #task-panel {
+            margin-top: 12px;
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+        #task-panel input {
+            background: #222;
+            border: 1px solid #444;
+            color: #eee;
+            padding: 6px 12px;
+            font-family: inherit;
+            font-size: 14px;
+            width: 400px;
+            border-radius: 3px;
+        }
+        #task-panel button {
+            background: #ffd700;
+            color: #1a1a2e;
+            border: none;
+            padding: 6px 16px;
+            font-family: inherit;
+            font-size: 14px;
+            cursor: pointer;
+            border-radius: 3px;
+            font-weight: bold;
+        }
+        #task-panel button:hover { background: #ffed4a; }
+    </style>
+</head>
+<body>
+    <h1>FALKENSTEIN</h1>
+    <div id="game-container"></div>
+    <div id="task-panel">
+        <input id="task-input" type="text" placeholder="Neuen Task eingeben..." />
+        <button onclick="submitTask()">Absenden</button>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3.80.1/dist/phaser.min.js"></script>
+    <script src="static/websocket.js"></script>
+    <script src="static/agents.js"></script>
+    <script src="static/game.js"></script>
+    <script>
+        function submitTask() {
+            const input = document.getElementById('task-input');
+            const title = input.value.trim();
+            if (title && ws) {
+                ws.submitTask(title, title);
+                input.value = '';
+            }
+        }
+        document.getElementById('task-input').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') submitTask();
+        });
+    </script>
+</body>
+</html>
