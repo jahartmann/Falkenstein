@@ -3,6 +3,10 @@ from unittest.mock import AsyncMock, MagicMock
 from backend.orchestrator import Orchestrator
 from backend.agent_pool import AgentPool
 from backend.models import AgentRole, TaskData
+from backend.relationships import RelationshipEngine
+from backend.models import RelationshipData
+from backend.database import Database
+import pytest_asyncio
 
 
 @pytest.mark.asyncio
@@ -49,3 +53,36 @@ async def test_orchestrator_assign_picks_matching_role():
     task_id = await orch.submit_task("Build API", "Code implementieren")
     assigned = await orch.assign_next_task()
     assert assigned is not None
+
+
+@pytest_asyncio.fixture
+async def real_db(tmp_path):
+    database = Database(tmp_path / "test.db")
+    await database.init()
+    yield database
+    await database.close()
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_assigns_duo_partner(real_db):
+    llm = AsyncMock()
+    llm.chat = AsyncMock(return_value="coder_1")
+    pool = AgentPool(llm=llm, db=real_db, tools=MagicMock())
+
+    rel = RelationshipData(agent_a="coder_1", agent_b="coder_2", synergy=0.95, trust=0.8)
+    await real_db.upsert_relationship(rel)
+
+    rel_engine = RelationshipEngine(real_db)
+    orch = Orchestrator(pool=pool, db=real_db, llm=llm, relationship_engine=rel_engine)
+
+    coder1 = pool.get_agent("coder_1")
+    await coder1.assign_task(task_id=99, title="Part A", description="First part")
+
+    real_db.create_task = AsyncMock(return_value=2)
+    real_db.get_task = AsyncMock(return_value=TaskData(
+        id=2, title="Code part B", description="Code implementieren", project="website"
+    ))
+    await orch.submit_task("Code part B", "Code implementieren", project="website")
+    event = await orch.assign_next_task()
+    assert event is not None
+    assert event["agent"] == "coder_2"
