@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.env
+data/
+workspace/
+.DS_Store
+.superpowers/
+node_modules/
+venv/
