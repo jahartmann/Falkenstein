@@ -316,6 +316,51 @@ class Database:
             respect=row["respect"],
         )
 
+    async def get_all_relationships(self) -> list[RelationshipData]:
+        cursor = await self._conn.execute("SELECT * FROM relationships")
+        rows = await cursor.fetchall()
+        return [
+            RelationshipData(
+                agent_a=row["agent_a"], agent_b=row["agent_b"],
+                trust=row["trust"], synergy=row["synergy"],
+                friendship=row["friendship"], respect=row["respect"],
+            )
+            for row in rows
+        ]
+
+    async def get_relationships_for(self, agent_id: str) -> list[RelationshipData]:
+        cursor = await self._conn.execute(
+            "SELECT * FROM relationships WHERE agent_a = ? OR agent_b = ?",
+            (agent_id, agent_id),
+        )
+        rows = await cursor.fetchall()
+        return [
+            RelationshipData(
+                agent_a=row["agent_a"], agent_b=row["agent_b"],
+                trust=row["trust"], synergy=row["synergy"],
+                friendship=row["friendship"], respect=row["respect"],
+            )
+            for row in rows
+        ]
+
+    async def log_personality_snapshot(self, agent_id: str, traits, mood):
+        await self._conn.execute(
+            "INSERT INTO personality_log (agent_id, traits, mood) VALUES (?, ?, ?)",
+            (agent_id, traits.model_dump_json(), mood.model_dump_json()),
+        )
+        await self._conn.commit()
+
+    async def get_personality_history(self, agent_id: str, limit: int = 30) -> list[dict]:
+        cursor = await self._conn.execute(
+            "SELECT traits, mood, created_at FROM personality_log WHERE agent_id = ? ORDER BY created_at DESC LIMIT ?",
+            (agent_id, limit),
+        )
+        rows = await cursor.fetchall()
+        return [
+            {"traits": json.loads(row["traits"]), "mood": json.loads(row["mood"]), "created_at": row["created_at"]}
+            for row in rows
+        ]
+
     # ------------------------------------------------------------------
     # Tool log
     # ------------------------------------------------------------------

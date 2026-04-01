@@ -85,3 +85,38 @@ async def test_upsert_and_get_relationship(db):
     loaded_rev = await db.get_relationship("coder_2", "coder_1")
     assert loaded_rev is not None
     assert loaded_rev.synergy == 0.9
+
+
+@pytest.mark.asyncio
+async def test_get_all_relationships(db):
+    rel1 = RelationshipData(agent_a="coder_1", agent_b="coder_2", synergy=0.9, trust=0.8)
+    rel2 = RelationshipData(agent_a="coder_1", agent_b="researcher", synergy=0.4, trust=0.5)
+    await db.upsert_relationship(rel1)
+    await db.upsert_relationship(rel2)
+    rels = await db.get_all_relationships()
+    assert len(rels) == 2
+
+
+@pytest.mark.asyncio
+async def test_get_relationships_for_agent(db):
+    rel1 = RelationshipData(agent_a="coder_1", agent_b="coder_2", synergy=0.9)
+    rel2 = RelationshipData(agent_a="coder_1", agent_b="researcher", synergy=0.4)
+    rel3 = RelationshipData(agent_a="writer", agent_b="ops", synergy=0.3)
+    await db.upsert_relationship(rel1)
+    await db.upsert_relationship(rel2)
+    await db.upsert_relationship(rel3)
+    rels = await db.get_relationships_for("coder_1")
+    assert len(rels) == 2
+    agents = {r.agent_a for r in rels} | {r.agent_b for r in rels}
+    assert "coder_1" in agents
+
+
+@pytest.mark.asyncio
+async def test_log_personality_snapshot(db):
+    from backend.models import AgentTraits, AgentMood
+    traits = AgentTraits(social=0.7, focus=0.8)
+    mood = AgentMood(energy=0.9)
+    await db.log_personality_snapshot("coder_1", traits, mood)
+    snapshots = await db.get_personality_history("coder_1", limit=5)
+    assert len(snapshots) == 1
+    assert snapshots[0]["traits"]["social"] == 0.7
