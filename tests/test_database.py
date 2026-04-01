@@ -24,6 +24,7 @@ async def test_init_creates_tables(db):
     assert "messages" in tables
     assert "relationships" in tables
     assert "tool_log" in tables
+    assert "personality_log" in tables
 
 
 @pytest.mark.asyncio
