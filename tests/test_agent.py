@@ -51,3 +51,19 @@ async def test_personality_description():
     assert "Alex" in desc
     assert isinstance(desc, str)
     assert len(desc) > 10
+
+
+from backend.personality import PersonalityEngine
+
+
+@pytest.mark.asyncio
+async def test_complete_task_triggers_personality_event():
+    data = make_agent_data(state=AgentState.WORK_TYPE, current_task_id=1)
+    data.traits = AgentTraits(confidence=0.5)
+    data.mood = AgentMood(stress=0.3)
+    db = AsyncMock()
+    agent = Agent(data=data, llm=AsyncMock(), db=db, tools=MagicMock(),
+                  personality_engine=PersonalityEngine())
+    await agent.complete_task(result="Done")
+    assert agent.data.traits.confidence > 0.5
+    assert agent.data.mood.stress < 0.3

@@ -2,6 +2,7 @@ from backend.models import AgentData, AgentState, TaskStatus, AgentTraits
 from backend.llm_client import LLMClient
 from backend.database import Database
 from backend.tools.base import ToolRegistry
+from backend.personality import PersonalityEngine, PersonalityEvent
 
 IDLE_STATES = {
     AgentState.IDLE_WANDER, AgentState.IDLE_TALK, AgentState.IDLE_COFFEE,
@@ -26,11 +27,13 @@ def _trait_label(value: float) -> str:
 
 
 class Agent:
-    def __init__(self, data: AgentData, llm: LLMClient, db: Database, tools: ToolRegistry):
+    def __init__(self, data: AgentData, llm: LLMClient, db: Database, tools: ToolRegistry,
+                 personality_engine: PersonalityEngine | None = None):
         self.data = data
         self.llm = llm
         self.db = db
         self.tools = tools
+        self.personality_engine = personality_engine or PersonalityEngine()
         self.session_messages: list[dict] = []
 
     @property
@@ -75,6 +78,19 @@ class Agent:
     async def complete_task(self, result: str):
         if self.data.current_task_id is not None:
             await self.db.update_task_status(self.data.current_task_id, TaskStatus.DONE)
+            self.data.traits, self.data.mood = self.personality_engine.apply_event(
+                self.data.traits, self.data.mood, PersonalityEvent.TASK_SUCCESS
+            )
+        self.data.current_task_id = None
+        self.data.state = AgentState.IDLE_SIT
+        self.session_messages = []
+
+    async def fail_task(self, reason: str):
+        if self.data.current_task_id is not None:
+            await self.db.update_task_status(self.data.current_task_id, TaskStatus.FAILED)
+            self.data.traits, self.data.mood = self.personality_engine.apply_event(
+                self.data.traits, self.data.mood, PersonalityEvent.TASK_FAILURE
+            )
         self.data.current_task_id = None
         self.data.state = AgentState.IDLE_SIT
         self.session_messages = []
