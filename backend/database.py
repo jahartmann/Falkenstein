@@ -238,6 +238,38 @@ class Database:
         rows = await cursor.fetchall()
         return [self._row_to_task(r) for r in rows]
 
+    async def get_subtasks(self, parent_id: int) -> list[TaskData]:
+        cursor = await self._conn.execute(
+            "SELECT * FROM tasks WHERE parent_task_id = ? ORDER BY id", (parent_id,)
+        )
+        rows = await cursor.fetchall()
+        return [self._row_to_task(r) for r in rows]
+
+    async def get_tasks_by_project(self, project: str) -> list[TaskData]:
+        cursor = await self._conn.execute(
+            "SELECT * FROM tasks WHERE project = ? ORDER BY id", (project,)
+        )
+        rows = await cursor.fetchall()
+        return [self._row_to_task(r) for r in rows]
+
+    async def update_task_result(self, task_id: int, result: str):
+        await self._conn.execute(
+            "UPDATE tasks SET result = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (result, task_id),
+        )
+        await self._conn.commit()
+
+    async def all_subtasks_done(self, parent_id: int) -> bool:
+        cursor = await self._conn.execute(
+            "SELECT COUNT(*) as total, SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) as done "
+            "FROM tasks WHERE parent_task_id = ?",
+            (parent_id,),
+        )
+        row = await cursor.fetchone()
+        total = row["total"]
+        done = row["done"] or 0
+        return total > 0 and total == done
+
     # ------------------------------------------------------------------
     # Messages
     # ------------------------------------------------------------------

@@ -194,3 +194,73 @@ async def test_daily_report_both_targets(router, telegram, obsidian):
     call_params = obsidian.execute.call_args[0][0]
     assert call_params["action"] == "daily_report"
     assert "Daily Report" in call_params["content"]
+
+
+@pytest.mark.asyncio
+async def test_escalation_failed_both_targets(router, telegram, obsidian):
+    """escalation_failed → telegram with ❌ emoji + reason, obsidian daily_report action."""
+    await router.route_event("escalation_failed", {
+        "agent_name": "ops",
+        "task_title": "Deploy",
+        "reason": "CLI returned non-zero exit code",
+        "details": "Deployment failed at step 3.",
+    })
+
+    telegram.send_message.assert_awaited_once()
+    msg = telegram.send_message.call_args[0][0]
+    assert "❌" in msg
+    assert "CLI returned non-zero exit code" in msg
+
+    obsidian.execute.assert_awaited_once()
+    call_params = obsidian.execute.call_args[0][0]
+    assert call_params["action"] == "daily_report"
+
+
+@pytest.mark.asyncio
+async def test_todo_from_telegram_obsidian_path(router, telegram, obsidian):
+    """todo_from_telegram → obsidian called with action=todo and project key."""
+    await router.route_event("todo_from_telegram", {
+        "content": "Review pull request #42",
+        "project": "Falkenstein",
+    })
+
+    obsidian.execute.assert_awaited_once()
+    call_params = obsidian.execute.call_args[0][0]
+    assert call_params["action"] == "todo"
+    assert call_params["project"] == "Falkenstein"
+    assert "Review pull request #42" in call_params["content"]
+
+
+@pytest.mark.asyncio
+async def test_project_created_both_targets(router, telegram, obsidian):
+    """project_created → telegram with 📁 message, obsidian with action=project."""
+    await router.route_event("project_created", {"project_name": "NewProject"})
+
+    telegram.send_message.assert_awaited_once()
+    msg = telegram.send_message.call_args[0][0]
+    assert "📁" in msg
+    assert "NewProject" in msg
+
+    obsidian.execute.assert_awaited_once()
+    call_params = obsidian.execute.call_args[0][0]
+    assert call_params["action"] == "project"
+    assert call_params["project_name"] == "NewProject"
+
+
+@pytest.mark.asyncio
+async def test_task_completed_without_project_uses_inbox(router, telegram, obsidian, llm):
+    """task_completed without project key → obsidian uses action=inbox instead of append."""
+    long_result = "x" * 150  # long enough to skip LLM check
+
+    await router.route_event("task_completed", {
+        "agent_name": "coder_1",
+        "task_title": "Standalone task",
+        "result": long_result,
+        # no "project" key
+    })
+
+    telegram.send_message.assert_awaited_once()
+    obsidian.execute.assert_awaited_once()
+    call_params = obsidian.execute.call_args[0][0]
+    assert call_params["action"] == "inbox"
+    llm.chat.assert_not_awaited()

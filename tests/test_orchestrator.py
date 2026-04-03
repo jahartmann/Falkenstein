@@ -86,3 +86,50 @@ async def test_orchestrator_assigns_duo_partner(real_db):
     event = await orch.assign_next_task()
     assert event is not None
     assert event["agent"] == "coder_2"
+
+
+@pytest.mark.asyncio
+async def test_process_work_event_escalation():
+    db = AsyncMock()
+    db.get_task = AsyncMock(return_value=TaskData(
+        id=1, title="Fix bug", description="Debug issue"
+    ))
+    llm = AsyncMock()
+    pool = AgentPool(llm=llm, db=db, tools=MagicMock())
+    orch = Orchestrator(pool=pool, db=db, llm=llm)
+
+    agent = pool.get_agent("coder_1")
+    event = {"type": "tool_use", "agent": "coder_1", "needs_escalation": True}
+    # cli_bridge not registered, so escalation returns empty
+    extras = await orch.process_work_event(event)
+    # No crash, returns list
+    assert isinstance(extras, list)
+
+
+@pytest.mark.asyncio
+async def test_process_work_event_budget_warning():
+    from backend.tools.cli_bridge import CLIBudgetTracker
+    db = AsyncMock()
+    llm = AsyncMock()
+    budget = CLIBudgetTracker(daily_budget=1000)
+    budget.record_usage(900)  # 90% — over warning threshold
+    pool = AgentPool(llm=llm, db=db, tools=MagicMock())
+    orch = Orchestrator(pool=pool, db=db, llm=llm, budget_tracker=budget)
+
+    event = {"type": "tool_use", "agent": "coder_1", "needs_escalation": False}
+    extras = await orch.process_work_event(event)
+    budget_events = [e for e in extras if e.get("type") == "budget_warning"]
+    assert len(budget_events) == 1
+    assert budget_events[0]["used"] == 900
+
+
+@pytest.mark.asyncio
+async def test_process_work_event_no_escalation():
+    db = AsyncMock()
+    llm = AsyncMock()
+    pool = AgentPool(llm=llm, db=db, tools=MagicMock())
+    orch = Orchestrator(pool=pool, db=db, llm=llm)
+
+    event = {"type": "tool_use", "agent": "coder_1", "needs_escalation": False}
+    extras = await orch.process_work_event(event)
+    assert extras == []

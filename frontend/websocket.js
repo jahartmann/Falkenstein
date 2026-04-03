@@ -20,6 +20,9 @@ class FalkensteinWS {
                 console.error('WS parse error:', e);
             }
         };
+        this.ws.onerror = (err) => {
+            console.error('WS error:', err);
+        };
         this.ws.onclose = () => {
             console.log('WS closed, reconnecting...');
             setTimeout(() => this.connect(), this.reconnectDelay);

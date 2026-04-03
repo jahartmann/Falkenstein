@@ -4,6 +4,7 @@ from backend.tools.base import Tool, ToolResult
 
 class FileManagerTool(Tool):
     name = "file_manager"
+    mutating = True  # writes/deletes files
     description = (
         "Dateien im Workspace lesen, schreiben, auflisten und löschen. "
         "Actions: read, write, list, delete. "

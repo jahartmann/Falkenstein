@@ -2,46 +2,43 @@
 <html lang="de">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <title>Falkenstein — KI Büro</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body { width: 100%; height: 100%; overflow: hidden; }
         body {
             background: #1a1a2e;
             display: flex;
             flex-direction: column;
-            align-items: center;
-            min-height: 100vh;
             font-family: 'Courier New', monospace;
             color: #eee;
         }
-        h1 {
-            margin: 16px 0 8px;
-            font-size: 18px;
-            color: #ffd700;
-            letter-spacing: 2px;
-        }
         #game-container {
-            border: 2px solid #333;
-            border-radius: 4px;
+            flex: 1;
+            width: 100%;
+            min-height: 0;
         }
-        #task-panel {
-            margin-top: 12px;
+        #bottom-bar {
             display: flex;
             gap: 8px;
             align-items: center;
+            padding: 8px 12px;
+            background: #111128;
+            border-top: 1px solid #333;
+            flex-shrink: 0;
         }
-        #task-panel input {
+        #bottom-bar input {
+            flex: 1;
             background: #222;
             border: 1px solid #444;
             color: #eee;
             padding: 6px 12px;
             font-family: inherit;
             font-size: 14px;
-            width: 400px;
             border-radius: 3px;
         }
-        #task-panel button {
+        .btn {
             background: #ffd700;
             color: #1a1a2e;
             border: none;
@@ -51,19 +48,79 @@
             cursor: pointer;
             border-radius: 3px;
             font-weight: bold;
+            white-space: nowrap;
         }
-        #task-panel button:hover { background: #ffed4a; }
+        .btn:hover { background: #ffed4a; }
+        .btn-small {
+            padding: 4px 10px;
+            font-size: 12px;
+            background: #333;
+            color: #eee;
+            border: 1px solid #555;
+        }
+        .btn-small:hover { background: #444; }
+
+        .overlay {
+            display: none;
+            position: fixed;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            background: #1e1e3a;
+            border: 2px solid #ffd700;
+            border-radius: 8px;
+            padding: 20px;
+            z-index: 1000;
+            min-width: 300px;
+            max-width: 90vw;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+        .overlay.active { display: block; }
+        .overlay h2 { color: #ffd700; font-size: 16px; margin-bottom: 12px; }
+        .overlay .close-btn {
+            position: absolute; top: 8px; right: 12px;
+            cursor: pointer; color: #888; font-size: 18px;
+        }
+        .overlay .close-btn:hover { color: #fff; }
+        .trait-bar { display: flex; align-items: center; margin: 4px 0; font-size: 12px; }
+        .trait-bar .label { width: 100px; }
+        .trait-bar .bar { flex: 1; height: 8px; background: #333; border-radius: 4px; overflow: hidden; }
+        .trait-bar .bar-fill { height: 100%; background: #ffd700; border-radius: 4px; }
+        .trait-bar .value { width: 40px; text-align: right; font-size: 11px; color: #888; }
+        .task-item { padding: 8px; margin: 4px 0; background: #252550; border-radius: 4px; font-size: 12px; }
+        .status { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 10px; margin-left: 6px; }
+        .status-open { background: #444; }
+        .status-in_progress { background: #b8860b; color: #fff; }
+        .status-done { background: #2e7d32; color: #fff; }
+        .mood-row { display: flex; gap: 12px; font-size: 12px; margin: 6px 0; }
+        .mood-item { color: #aaa; }
+        .mood-item span { color: #ffd700; }
+        #backdrop { display: none; position: fixed; top:0;left:0;width:100%;height:100%;background:#00000066;z-index:999; }
+        #backdrop.active { display: block; }
     </style>
 </head>
 <body>
-    <h1>FALKENSTEIN</h1>
     <div id="game-container"></div>
-    <div id="task-panel">
-        <input id="task-input" type="text" placeholder="Neuen Task eingeben..." />
-        <button onclick="submitTask()">Absenden</button>
+    <div id="bottom-bar">
+        <input id="task-input" type="text" placeholder="Task eingeben... (WASD/Pfeiltasten zum Bewegen)" />
+        <button class="btn" onclick="submitTask()">Absenden</button>
+        <button class="btn-small" onclick="showTaskBoard()">Tasks</button>
+    </div>
+
+    <div id="backdrop" onclick="closeOverlays()"></div>
+    <div id="agent-detail" class="overlay">
+        <span class="close-btn" onclick="closeOverlays()">✕</span>
+        <h2 id="agent-detail-title">Agent</h2>
+        <div id="agent-detail-content"></div>
+    </div>
+    <div id="task-board" class="overlay">
+        <span class="close-btn" onclick="closeOverlays()">✕</span>
+        <h2>Task Board</h2>
+        <div id="task-board-content"></div>
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/phaser@3.80.1/dist/phaser.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/easystarjs@0.4.4/src/easystar.min.js"></script>
     <script src="static/websocket.js"></script>
     <script src="static/agents.js"></script>
     <script src="static/game.js"></script>
@@ -71,14 +128,54 @@
         function submitTask() {
             const input = document.getElementById('task-input');
             const title = input.value.trim();
-            if (title && ws) {
-                ws.submitTask(title, title);
+            if (title && window.ws) {
+                window.ws.submitTask(title, title);
                 input.value = '';
             }
         }
         document.getElementById('task-input').addEventListener('keydown', (e) => {
             if (e.key === 'Enter') submitTask();
         });
+        function closeOverlays() {
+            document.querySelectorAll('.overlay').forEach(el => el.classList.remove('active'));
+            document.getElementById('backdrop').classList.remove('active');
+        }
+        function renderTraitBar(label, value) {
+            const pct = Math.round(value * 100);
+            return '<div class="trait-bar"><span class="label">' + label + '</span><div class="bar"><div class="bar-fill" style="width:' + pct + '%"></div></div><span class="value">' + pct + '%</span></div>';
+        }
+        async function showAgentDetail(agentId) {
+            try {
+                const resp = await fetch('/api/agent/' + agentId);
+                const data = await resp.json();
+                if (data.error) return;
+                const a = data.agent, t = a.traits, m = a.mood;
+                let html = '<div style="margin-bottom:12px"><strong>Rolle:</strong> ' + a.role + ' <strong>Status:</strong> ' + a.state + '</div>';
+                html += '<div style="margin-bottom:12px"><strong>Traits</strong>';
+                html += renderTraitBar('Sozial', t.social) + renderTraitBar('Fokus', t.focus) + renderTraitBar('Vertrauen', t.confidence);
+                html += renderTraitBar('Geduld', t.patience) + renderTraitBar('Neugier', t.curiosity) + renderTraitBar('Führung', t.leadership) + '</div>';
+                html += '<div class="mood-row"><span class="mood-item">⚡ <span>' + Math.round(m.energy*100) + '%</span></span>';
+                html += '<span class="mood-item">😰 <span>' + Math.round(m.stress*100) + '%</span></span>';
+                html += '<span class="mood-item">🔥 <span>' + Math.round(m.motivation*100) + '%</span></span></div>';
+                document.getElementById('agent-detail-title').textContent = a.name;
+                document.getElementById('agent-detail-content').innerHTML = html;
+                document.getElementById('agent-detail').classList.add('active');
+                document.getElementById('backdrop').classList.add('active');
+            } catch(e) { console.error(e); }
+        }
+        async function showTaskBoard() {
+            try {
+                const resp = await fetch('/api/tasks');
+                const tasks = await resp.json();
+                let html = tasks.length === 0 ? '<p style="color:#888">Keine offenen Tasks.</p>' : '';
+                tasks.forEach(t => {
+                    html += '<div class="task-item"><strong>#' + t.id + '</strong> ' + t.title + '<span class="status status-' + t.status + '">' + t.status + '</span></div>';
+                });
+                document.getElementById('task-board-content').innerHTML = html;
+                document.getElementById('task-board').classList.add('active');
+                document.getElementById('backdrop').classList.add('active');
+            } catch(e) { console.error(e); }
+        }
     </script>
 </body>
 </html>

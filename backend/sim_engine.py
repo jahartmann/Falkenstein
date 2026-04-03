@@ -22,6 +22,7 @@ class SimEngine:
         self.llm = llm
         self.rel_engine = relationship_engine
         self.personality_engine = personality_engine or PersonalityEngine()
+        self._tick_index = 0  # Round-robin: only 1 agent per tick
 
     def _nearby_agents(self, agent: Agent, radius: int = 5) -> list[Agent]:
         result = []
@@ -47,14 +48,25 @@ class SimEngine:
         return random.choices(nearby, weights=weights, k=1)[0]
 
     async def tick(self) -> list[dict]:
+        """Process ONE idle agent per tick (round-robin) to avoid LLM overload."""
         events = []
-        for agent in self.agents:
-            if not agent.is_idle:
-                continue
+        idle_agents = [a for a in self.agents if a.is_idle]
+        if not idle_agents:
+            return events
+
+        # Apply mood decay to all idle agents (cheap, no LLM)
+        for agent in idle_agents:
             agent.data.mood = self.personality_engine.decay_mood(agent.data.mood)
+
+        # Only process one agent via LLM per tick
+        agent = idle_agents[self._tick_index % len(idle_agents)]
+        self._tick_index += 1
+        try:
             event = await self._tick_agent(agent)
             if event:
                 events.append(event)
+        except Exception as e:
+            print(f"Sim tick error for {agent.data.name}: {e}")
         return events
 
     async def _tick_agent(self, agent: Agent) -> dict | None:
