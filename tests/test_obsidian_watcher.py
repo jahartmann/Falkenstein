@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -207,3 +209,27 @@ def test_empty_vault_no_crash(tmp_path, router):
     watcher.scan_files()
     changes = watcher.detect_changes()
     assert changes == []
+
+
+@pytest.mark.asyncio
+async def test_debounce_calls_router(vault, router):
+    """_reset_debounce triggers detect_changes and routes todo_from_obsidian."""
+    watcher = ObsidianWatcher(vault_path=vault, router=router, debounce_seconds=0.1)
+    watcher._loop = asyncio.get_running_loop()
+    watcher.scan_files()
+
+    inbox = vault / "Management" / "Inbox.md"
+    inbox.write_text(
+        "# Inbox\n\n"
+        "- [ ] [2026-04-01 10:00] Existing todo\n"
+        "- [ ] [2026-04-03 15:00] Brand new todo\n"
+    )
+
+    # Trigger debounce directly (simulating what watchdog would do)
+    watcher._reset_debounce()
+    await asyncio.sleep(0.2)  # wait for debounce_seconds to expire
+
+    router.route_event.assert_awaited()
+    args = router.route_event.call_args[0]
+    assert args[0] == "todo_from_obsidian"
+    assert "Brand new todo" in args[1]["content"]

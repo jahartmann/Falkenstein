@@ -82,15 +82,15 @@ class ObsidianWatcher:
             known_hashes = self._known.get(key, set())
 
             new_todos = []
-            new_hashes: set[str] = set()
+            current_hashes: set[str] = set()
             for line in current_lines:
                 h = _hash_line(line)
-                new_hashes.add(h)
+                current_hashes.add(h)
                 if h not in known_hashes:
                     new_todos.append(line)
 
-            # Update snapshot (union keeps everything we've ever seen)
-            self._known[key] = known_hashes | new_hashes
+            # Replace: track current state, not cumulative history
+            self._known[key] = current_hashes
 
             project = _extract_project(path)
             for line in new_todos:
@@ -130,29 +130,19 @@ class ObsidianWatcher:
             await self.stop()
 
     async def stop(self) -> None:
-        """Stop the watchdog observer."""
+        """Stop the watchdog observer without blocking the event loop."""
         if self._observer is not None and self._observer.is_alive():
             self._observer.stop()
-            self._observer.join()
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, self._observer.join)
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
     def _all_candidate_files(self) -> list[Path]:
-        """Yield all files we might care about, whether they exist yet or not tracked."""
-        files: list[Path] = []
-
-        inbox = self.vault / "Management" / "Inbox.md"
-        if inbox.exists():
-            files.append(inbox)
-
-        projekte_root = self.vault / "Falkenstein" / "Projekte"
-        if projekte_root.exists():
-            for tasks_file in sorted(projekte_root.glob("*/Tasks.md")):
-                files.append(tasks_file)
-
-        return files
+        """Delegate to watched_files — kept for internal call-site compatibility."""
+        return self.watched_files
 
     @staticmethod
     def _read_todo_lines(path: Path) -> list[str]:
@@ -175,18 +165,22 @@ class ObsidianWatcher:
         """Return set of SHA256 hashes for current unchecked todo lines."""
         return {_hash_line(line) for line in ObsidianWatcher._read_todo_lines(path)}
 
-    # Called from watchdog thread via run_coroutine_threadsafe
+    # Called from watchdog thread — must not touch the event loop directly
     def _on_file_modified(self, file_path: str) -> None:
         """Bridge: schedule debounced processing on the asyncio event loop."""
+        self._schedule_debounce()
+
+    def _schedule_debounce(self) -> None:
+        """Called from watchdog thread. Schedule (or reschedule) debounce."""
         if self._loop is None:
             return
-        asyncio.run_coroutine_threadsafe(self._debounce(), self._loop)
+        self._loop.call_soon_threadsafe(self._reset_debounce)
 
-    async def _debounce(self) -> None:
-        """Cancel any pending debounce task and start a fresh one."""
-        if self._debounce_task is not None and not self._debounce_task.done():
+    def _reset_debounce(self) -> None:
+        """Must be called on the event loop thread. Atomically cancel+reschedule."""
+        if self._debounce_task and not self._debounce_task.done():
             self._debounce_task.cancel()
-        self._debounce_task = asyncio.create_task(self._process_after_delay())
+        self._debounce_task = asyncio.ensure_future(self._process_after_delay())
 
     async def _process_after_delay(self) -> None:
         """Wait debounce_seconds, then detect changes and route events."""
@@ -194,7 +188,7 @@ class ObsidianWatcher:
             await asyncio.sleep(self.debounce_seconds)
             changes = self.detect_changes()
             for change in changes:
-                await self.router.route_event("new_todo", change)
+                await self.router.route_event("todo_from_obsidian", change)
         except asyncio.CancelledError:
             pass
 
