@@ -25,6 +25,8 @@ from backend.relationships import RelationshipEngine
 from backend.memory.session import SessionMemory
 from backend.memory.rag_engine import RAGEngine
 from backend.daily_report import DailyReportGenerator
+from backend.notification_router import NotificationRouter
+from backend.obsidian_watcher import ObsidianWatcher
 
 db: Database = None
 pool: AgentPool = None
@@ -40,6 +42,9 @@ telegram_task: asyncio.Task = None
 rel_engine: RelationshipEngine = None
 personality_engine: PersonalityEngine = None
 daily_reporter: DailyReportGenerator = None
+notification_router: NotificationRouter = None
+obsidian_watcher: ObsidianWatcher = None
+watcher_task: asyncio.Task = None
 
 
 async def sim_loop():
@@ -57,9 +62,16 @@ async def sim_loop():
             for event in events:
                 await ws_mgr.broadcast(event)
 
-                # Telegram notifications for key events
-                if telegram and telegram.enabled:
-                    await _notify_telegram(event)
+                # Route events to Telegram and/or Obsidian
+                if notification_router:
+                    etype = event.get("type", "")
+                    agent_id = event.get("agent", "")
+                    agent = pool.get_agent(agent_id) if agent_id else None
+                    payload = {
+                        **event,
+                        "agent_name": agent.data.name if agent else agent_id,
+                    }
+                    await notification_router.route_event(etype, payload)
 
             await ws_mgr.broadcast({
                 "type": "state_update",
@@ -72,10 +84,13 @@ async def sim_loop():
                 if not assigned:
                     break
                 await ws_mgr.broadcast(assigned)
-                if telegram and telegram.enabled:
-                    await telegram.notify_task_assigned(
-                        assigned.get("agent", "?"), assigned.get("task_title", "")
-                    )
+                if notification_router:
+                    agent_id = assigned.get("agent", "")
+                    agent = pool.get_agent(agent_id) if agent_id else None
+                    await notification_router.route_event("task_assigned", {
+                        "agent_name": agent.data.name if agent else agent_id,
+                        "task_title": assigned.get("task_title", ""),
+                    })
 
             # Retire idle sub-agents
             retired = pool.retire_idle_sub_agents()
@@ -93,14 +108,16 @@ async def sim_loop():
             if daily_reporter and daily_reporter.should_generate():
                 try:
                     report = await daily_reporter.generate()
-                    # Save to Obsidian
+                    summary = await daily_reporter.generate_telegram_summary()
+                    # Full report to Obsidian directly
                     obsidian = pool.agents[0].tools.get("obsidian_manager")
                     if obsidian:
                         await obsidian.execute({"action": "daily_report", "content": report})
-                    # Send to Telegram
-                    if telegram and telegram.enabled:
-                        summary = await daily_reporter.generate_telegram_summary()
-                        await telegram.send_message(summary)
+                    # Summary to Telegram via router
+                    if notification_router:
+                        await notification_router.route_event("daily_report", {
+                            "content": summary,
+                        })
                     await ws_mgr.broadcast({"type": "daily_report_generated"})
                 except Exception as e:
                     print(f"Daily report error: {e}")
@@ -109,23 +126,6 @@ async def sim_loop():
         except Exception as e:
             print(f"Sim loop error: {e}")
         await asyncio.sleep(10)
-
-
-async def _notify_telegram(event: dict):
-    """Send Telegram notifications for important events."""
-    etype = event.get("type", "")
-    agent_id = event.get("agent", "")
-    agent = pool.get_agent(agent_id) if agent_id else None
-    name = agent.data.name if agent else agent_id
-
-    if etype == "task_completed":
-        await telegram.notify_task_done(name, str(event.get("task_id", "")), "Fertig")
-    elif etype == "escalation_success":
-        await telegram.notify_escalation(name, event.get("output_preview", ""))
-    elif etype == "escalation_failed":
-        await telegram.notify_task_failed(name, "Eskalation", event.get("reason", ""))
-    elif etype == "budget_warning":
-        await telegram.notify_budget_warning(event["used"], event["budget"])
 
 
 llm_client: LLMClient = None
@@ -196,6 +196,10 @@ async def handle_telegram_message(msg: dict):
         if obsidian:
             result = await obsidian.execute({"action": "todo", "content": content, "project": project})
             await telegram.send_message(f"✅ {result.output}")
+            # Auto-submit as agent task if configured
+            if settings.obsidian_auto_submit_tasks:
+                await orchestrator.submit_task(title=content[:100], description=content, project=project)
+                await orchestrator.assign_next_task()
         else:
             await telegram.send_message("Obsidian nicht verfügbar.")
 
@@ -270,6 +274,7 @@ async def _chat_with_gemma(text: str, chat_id: str):
 async def lifespan(app: FastAPI):
     global db, pool, orchestrator, sim, sim_task, telegram_task
     global rel_engine, personality_engine, telegram, budget_tracker, llm_client, daily_reporter
+    global notification_router, obsidian_watcher, watcher_task
 
     db = Database(settings.db_path)
     await db.init()
@@ -315,14 +320,32 @@ async def lifespan(app: FastAPI):
 
     daily_reporter = DailyReportGenerator(db=db, pool=pool)
 
-    sim_task = asyncio.create_task(sim_loop())
-
     # Start Telegram polling if configured
     telegram = TelegramBot()
     if telegram.enabled:
         telegram.on_message(handle_telegram_message)
         telegram_task = asyncio.create_task(telegram.poll_loop())
-        print(f"Telegram bot active")
+        print("Telegram bot active")
+
+    # Notification Router
+    obsidian_tool = tools.get("obsidian_manager")
+    notification_router = NotificationRouter(
+        telegram=telegram if telegram and telegram.enabled else None,
+        obsidian=obsidian_tool,
+        llm=llm,
+        llm_routing_enabled=settings.llm_routing_enabled,
+    )
+
+    sim_task = asyncio.create_task(sim_loop())
+
+    # Start Obsidian Watcher if configured
+    if settings.obsidian_watch_enabled and settings.obsidian_vault_path.exists():
+        obsidian_watcher = ObsidianWatcher(
+            vault_path=settings.obsidian_vault_path,
+            router=notification_router,
+        )
+        watcher_task = asyncio.create_task(obsidian_watcher.start())
+        print("Obsidian watcher active")
 
     print(f"Falkenstein running on port {settings.frontend_port}")
     yield
@@ -336,6 +359,12 @@ async def lifespan(app: FastAPI):
         telegram_task.cancel()
         try:
             await telegram_task
+        except asyncio.CancelledError:
+            pass
+    if watcher_task:
+        watcher_task.cancel()
+        try:
+            await watcher_task
         except asyncio.CancelledError:
             pass
     await pool.save_all()
