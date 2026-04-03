@@ -111,6 +111,7 @@ async def test_budget_warning_only_telegram(router, telegram, obsidian):
 
     telegram.send_message.assert_awaited_once()
     msg = telegram.send_message.call_args[0][0]
+    assert "80%" in msg
     assert "80,000" in msg
     assert "100,000" in msg
     obsidian.execute.assert_not_awaited()

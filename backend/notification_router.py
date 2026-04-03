@@ -56,6 +56,8 @@ class NotificationRouter:
         write_obsidian = rule.obsidian
         if rule.obsidian and rule.hybrid_check:
             content = self._get_hybrid_content(event_type, payload)
+            # Short results go through LLM check; long results (>=100 chars) are
+            # considered detailed enough and always written to Obsidian.
             if len(content) < 100:
                 write_obsidian = await self._should_write_obsidian(event_type, content)
 
@@ -91,7 +93,8 @@ class NotificationRouter:
             case "escalation_failed":
                 return f"❌ *Eskalation gescheitert* bei {name}: {title}\n_{reason[:200]}_"
             case "budget_warning":
-                return f"⚠️ *Budget-Warnung*: {used:,}/{budget:,} Tokens"
+                pct = int(used / budget * 100) if budget else 0
+                return f"⚠️ *Budget-Warnung*: {pct}% des täglichen CLI-Token-Budgets verbraucht ({used:,}/{budget:,} Tokens)"
             case "daily_report":
                 return content[:2000]
             case "todo_from_telegram":
@@ -101,7 +104,8 @@ class NotificationRouter:
             case "project_created":
                 return f"📁 Projekt erstellt: {project_name}"
             case _:
-                return None
+                # Explicit fallthrough: unknown event types produce no telegram message
+                return ""
 
     # ------------------------------------------------------------------
     # Obsidian writing
@@ -139,10 +143,11 @@ class NotificationRouter:
                     })
 
             case "escalation_success" | "escalation_failed":
-                await self.obsidian.execute({
-                    "action": "daily_report",
-                    "content": details or content,
-                })
+                if details or content:
+                    await self.obsidian.execute({
+                        "action": "daily_report",
+                        "content": details or content,
+                    })
 
             case "daily_report":
                 await self.obsidian.execute({
@@ -176,6 +181,12 @@ class NotificationRouter:
                     "action": "project",
                     "project_name": project_name,
                 })
+
+            case _:
+                # Explicit no-op: new event types with obsidian=True in ROUTING_TABLE
+                # won't silently skip without being noticed here.
+                logger.warning("_write_obsidian: unhandled event type '%s'", event_type)
+                pass
 
     # ------------------------------------------------------------------
     # LLM hybrid check
