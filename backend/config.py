@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     ollama_num_ctx: int = 32768
     # Extended context for long tasks (Telegram history, repo loading)
     ollama_num_ctx_extended: int = 131072
+    # Notification Router
+    obsidian_watch_enabled: bool = True
+    obsidian_auto_submit_tasks: bool = False
+    llm_routing_enabled: bool = True
 
     @property
     def model_light(self) -> str:
