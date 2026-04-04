@@ -267,15 +267,17 @@ async def test_handle_scheduled_error(agent, mock_telegram, mock_db):
     mock_db.update_task_result.assert_called_once()
     assert "ERROR" in mock_db.update_task_result.call_args[0][1]
     mock_db.update_schedule_result.assert_called_once_with(1, "error", "LLM timeout")
-    # WS events: spawned + error
-    assert len(ws_events) == 2
-    assert ws_events[0]["type"] == "agent_spawned"
-    assert ws_events[1]["type"] == "agent_error"
+    # WS events: task_created + agent_spawned + schedule_fired + agent_error
+    assert len(ws_events) == 4
+    assert ws_events[0]["type"] == "task_created"
+    assert ws_events[1]["type"] == "agent_spawned"
+    assert ws_events[2]["type"] == "schedule_fired"
+    assert ws_events[3]["type"] == "agent_error"
 
 
 @pytest.mark.asyncio
 async def test_handle_scheduled_ws_events(agent, mock_db):
-    """Scheduled task sends agent_spawned and agent_done WS events."""
+    """Scheduled task sends task_created, agent_spawned, schedule_fired, and agent_done WS events."""
     task = _make_scheduled_task(name="WS Test")
     ws_events = []
     agent.ws_callback = AsyncMock(side_effect=lambda msg: ws_events.append(msg))
@@ -285,10 +287,14 @@ async def test_handle_scheduled_ws_events(agent, mock_db):
         mock_sub.agent_id = "sub_ops_ws"
         MockSub.return_value = mock_sub
         await agent.handle_scheduled(task)
-    assert len(ws_events) == 2
-    assert ws_events[0]["type"] == "agent_spawned"
-    assert ws_events[0]["task"] == "WS Test"
-    assert ws_events[1]["type"] == "agent_done"
+    assert len(ws_events) == 4
+    assert ws_events[0]["type"] == "task_created"
+    assert ws_events[0]["title"] == "[Schedule] WS Test"
+    assert ws_events[1]["type"] == "agent_spawned"
+    assert ws_events[1]["task"] == "WS Test"
+    assert ws_events[2]["type"] == "schedule_fired"
+    assert ws_events[2]["name"] == "WS Test"
+    assert ws_events[3]["type"] == "agent_done"
 
 
 # ── /schedule command tests ──────────────────────────────────

@@ -73,6 +73,7 @@ class MainAgent:
         self.scheduler = scheduler
         self.config_service = config_service
         self.active_agents: dict[str, dict] = {}
+        self._pending_tasks: dict[int, asyncio.Task] = {}
         self._chat_history: dict[str, list[dict]] = {}
         self._max_history = 20
 
@@ -400,9 +401,10 @@ class MainAgent:
         info = self.active_agents.get(agent_id)
         if not info:
             return f"Agent `{agent_id}` nicht gefunden."
-        sub = info.get("sub_agent")
-        if sub and hasattr(sub, "cancel"):
-            sub.cancel()
+        # Cancel the asyncio task running this agent
+        asyncio_task = info.get("asyncio_task")
+        if asyncio_task and not asyncio_task.done():
+            asyncio_task.cancel()
         self.active_agents.pop(agent_id, None)
         # Update DB task status
         task_id = info.get("task_id")
@@ -467,13 +469,19 @@ class MainAgent:
                     extract_and_store_facts(self.llm, self.fact_memory, text, answer)
                 )
         elif msg_type == "action":
-            asyncio.create_task(self._handle_action(classification, text, chat_id, project=project_hint))
+            task = asyncio.create_task(self._handle_action(classification, text, chat_id, project=project_hint))
+            self._pending_tasks[id(task)] = task
+            task.add_done_callback(lambda t: self._pending_tasks.pop(id(t), None))
             return classification.get("title", "Agent gestartet")
         elif msg_type == "content":
-            asyncio.create_task(self._handle_content(classification, text, chat_id, project=project_hint))
+            task = asyncio.create_task(self._handle_content(classification, text, chat_id, project=project_hint))
+            self._pending_tasks[id(task)] = task
+            task.add_done_callback(lambda t: self._pending_tasks.pop(id(t), None))
             return classification.get("title", "Agent gestartet")
         elif msg_type == "task":
-            asyncio.create_task(self._handle_content(classification, text, chat_id, project=project_hint))
+            task = asyncio.create_task(self._handle_content(classification, text, chat_id, project=project_hint))
+            self._pending_tasks[id(task)] = task
+            task.add_done_callback(lambda t: self._pending_tasks.pop(id(t), None))
             return classification.get("title", "Agent gestartet")
 
     def _get_llm_for(self, task_type: str):
@@ -503,6 +511,9 @@ class MainAgent:
             task = TaskData(title=title, description=original_text, status=TaskStatus.OPEN)
             task_id = await self.db.create_task(task)
 
+            if self.ws_callback:
+                await self.ws_callback({"type": "task_created", "task_id": task_id, "title": title})
+
             if self.telegram:
                 await self.telegram.send_message(
                     f"👍 Mache ich: {title}",
@@ -530,6 +541,7 @@ class MainAgent:
             self.active_agents[sub.agent_id] = {
                 "type": agent_type, "task": title,
                 "task_id": task_id, "sub_agent": sub,
+                "asyncio_task": asyncio.current_task(),
             }
 
             if self.ws_callback:
@@ -591,6 +603,9 @@ class MainAgent:
             task = TaskData(title=title, description=original_text, status=TaskStatus.OPEN)
             task_id = await self.db.create_task(task)
 
+            if self.ws_callback:
+                await self.ws_callback({"type": "task_created", "task_id": task_id, "title": title})
+
             # 2. Send confirmation to Telegram
             if self.telegram:
                 await self.telegram.send_message(
@@ -619,6 +634,7 @@ class MainAgent:
             self.active_agents[sub.agent_id] = {
                 "type": agent_type, "task": title,
                 "task_id": task_id, "sub_agent": sub,
+                "asyncio_task": asyncio.current_task(),
             }
 
             if self.ws_callback:
@@ -685,6 +701,10 @@ class MainAgent:
         # 1. Create DB task
         db_task = TaskData(title=f"[Schedule] {name}", description=prompt, status=TaskStatus.OPEN)
         task_id = await self.db.create_task(db_task)
+
+        if self.ws_callback:
+            await self.ws_callback({"type": "task_created", "task_id": task_id, "title": f"[Schedule] {name}"})
+
         await self.db.update_task_status(task_id, TaskStatus.IN_PROGRESS)
 
         # 2. Register in active_agents
@@ -696,50 +716,52 @@ class MainAgent:
         if self.ws_callback:
             await self.ws_callback({"type": "agent_spawned", "agent_id": sub.agent_id, "agent_type": agent_type, "task": name})
 
+        if self.ws_callback:
+            await self.ws_callback({"type": "schedule_fired", "schedule_id": schedule_id, "name": name})
+
         try:
             result = await sub.run()
-        except Exception as e:
+
+            # 4. Update DB task
             await self.db.update_task_status(task_id, TaskStatus.DONE)
+            await self.db.update_task_result(task_id, (result or "")[:5000])
+
+            # 5. Update schedule result status
+            if schedule_id:
+                if result and result.strip().startswith("HEARTBEAT_OK"):
+                    await self.db.update_schedule_result(schedule_id, "ok")
+                else:
+                    await self.db.update_schedule_result(schedule_id, "done")
+
+            # 6. Send WS done event
+            if self.ws_callback:
+                await self.ws_callback({"type": "agent_done", "agent_id": sub.agent_id, "task": name})
+
+            # Skip output for heartbeats
+            if not result or result.strip().startswith("HEARTBEAT_OK"):
+                return
+
+            # 7. Write to Obsidian if enabled
+            if self._obsidian_enabled():
+                try:
+                    await asyncio.to_thread(self.obsidian_writer.write_result, title=name, typ="Recherche", content=result)
+                except Exception as e:
+                    print(f"Obsidian write failed for scheduled '{name}': {e}")
+
+            # 8. Send result to Telegram
+            if self.telegram:
+                summary = result[:500] + ("..." if len(result) > 500 else "")
+                await self.telegram.send_message(f"Schedule '{name}':\n{summary}")
+
+        except Exception as e:
+            await self.db.update_task_status(task_id, TaskStatus.FAILED)
             await self.db.update_task_result(task_id, f"ERROR: {e}")
             if schedule_id:
                 await self.db.update_schedule_result(schedule_id, "error", str(e))
-            self.active_agents.pop(sub.agent_id, None)
             if self.ws_callback:
                 await self.ws_callback({"type": "agent_error", "agent_id": sub.agent_id, "error": str(e)})
-            return
         finally:
             self.active_agents.pop(sub.agent_id, None)
-
-        # 4. Update DB task
-        await self.db.update_task_status(task_id, TaskStatus.DONE)
-        await self.db.update_task_result(task_id, (result or "")[:5000])
-
-        # 5. Update schedule result status
-        if schedule_id:
-            if result and result.strip().startswith("HEARTBEAT_OK"):
-                await self.db.update_schedule_result(schedule_id, "ok")
-            else:
-                await self.db.update_schedule_result(schedule_id, "done")
-
-        # 6. Send WS done event
-        if self.ws_callback:
-            await self.ws_callback({"type": "agent_done", "agent_id": sub.agent_id, "task": name})
-
-        # Skip output for heartbeats
-        if not result or result.strip().startswith("HEARTBEAT_OK"):
-            return
-
-        # 7. Write to Obsidian if enabled
-        if self._obsidian_enabled():
-            try:
-                await asyncio.to_thread(self.obsidian_writer.write_result, title=name, typ="Recherche", content=result)
-            except Exception as e:
-                print(f"Obsidian write failed for scheduled '{name}': {e}")
-
-        # 8. Send result to Telegram
-        if self.telegram:
-            summary = result[:500] + ("..." if len(result) > 500 else "")
-            await self.telegram.send_message(f"Schedule '{name}':\n{summary}")
 
     def get_status(self) -> dict:
         return {
