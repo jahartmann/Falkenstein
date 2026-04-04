@@ -43,6 +43,9 @@ _CLASSIFY_SYSTEM = (
     "installiere, repariere). Hier wird KEIN Report geschrieben — du führst einfach aus.\n"
     "3. content — Der Nutzer will ein ERGEBNIS sehen (Recherche, Analyse, Guide, Zusammenfassung, "
     "Code schreiben). Hier wird das Ergebnis nach Obsidian geschrieben.\n\n"
+    "4. multi_step — Der Nutzer will eine Aufgabe, die mehrere Schritte erfordert "
+    "(z.B. 'Recherchiere X und schreibe dann einen Blogpost', 'Vergleiche A und B und erstelle eine Zusammenfassung'). "
+    "Hier werden mehrere Agents nacheinander ausgeführt.\n\n"
     "WICHTIG: Wenn der Nutzer sagt 'optimiere X', 'stelle X ein', 'mach X' → das ist eine ACTION.\n"
     "Nur wenn er 'recherchiere', 'analysiere', 'erstelle einen Report/Guide' sagt → das ist CONTENT.\n\n"
     "Bei quick_reply: Beantworte die Frage direkt.\n"
@@ -52,7 +55,8 @@ _CLASSIFY_SYSTEM = (
     "Antworte NUR mit JSON:\n"
     '- quick_reply: {"type": "quick_reply", "answer": "<deine Antwort>"}\n'
     '- action: {"type": "action", "agent": "<typ>", "title": "<kurzer Titel>"}\n'
-    '- content: {"type": "content", "agent": "<typ>", "result_type": "<typ>", "title": "<kurzer Titel>"}'
+    '- content: {"type": "content", "agent": "<typ>", "result_type": "<typ>", "title": "<kurzer Titel>"}\n'
+    '- multi_step: {"type": "multi_step", "title": "<Titel>", "steps": [{"agent": "<typ>", "task": "<Beschreibung>"}, ...]}'
 )
 
 
@@ -166,6 +170,7 @@ class MainAgent:
         "/memory": "Gespeicherte Fakten anzeigen",
         "/schedule": "Schedules verwalten (list/create/edit/toggle/delete/run)",
         "/cancel": "Agent abbrechen — /cancel <agent_id>",
+        "/task": "Task-Details anzeigen — /task <ID>",
         "/help": "Alle Befehle anzeigen",
     }
 
@@ -515,6 +520,11 @@ class MainAgent:
             self._pending_tasks[id(task)] = task
             task.add_done_callback(lambda t: self._pending_tasks.pop(id(t), None))
             return classification.get("title", "Agent gestartet")
+        elif msg_type == "multi_step":
+            task = asyncio.create_task(self._handle_multi_step(classification, text, chat_id, project=project_hint))
+            self._pending_tasks[id(task)] = task
+            task.add_done_callback(lambda t: self._pending_tasks.pop(id(t), None))
+            return classification.get("title", "Multi-Step gestartet")
 
     def _get_llm_for(self, task_type: str):
         """Get the right LLM for a task type via router, fallback to default."""
@@ -741,6 +751,88 @@ class MainAgent:
             error_msg = f"❌ Agent-Fehler: {e}"
             if self.telegram:
                 await self.telegram.send_message(error_msg[:4000], chat_id=chat_id or None)
+
+    async def _handle_multi_step(self, classification: dict, original_text: str, chat_id: str, project: str | None = None):
+        """Handle multi-step tasks — run SubAgents sequentially, pass results between steps."""
+        try:
+            title = classification.get("title", original_text[:80])
+            steps = classification.get("steps", [])
+            if not steps:
+                return await self._handle_content(classification, original_text, chat_id, project)
+
+            task = TaskData(title=title, description=original_text, status=TaskStatus.OPEN)
+            parent_task_id = await self.db.create_task(task)
+            await self.db.update_task_status(parent_task_id, TaskStatus.IN_PROGRESS)
+
+            if self.ws_callback:
+                await self.ws_callback({"type": "task_created", "task_id": parent_task_id, "title": title})
+
+            if self.telegram:
+                step_list = "\n".join(f"  {i+1}. {s.get('task', '')[:60]}" for i, s in enumerate(steps))
+                await self.telegram.send_message(f"📋 Plan: {title}\n{step_list}", chat_id=chat_id or None)
+
+            accumulated_context = ""
+            for i, step in enumerate(steps):
+                agent_type = step.get("agent", "researcher")
+                step_desc = step.get("task", "")
+
+                if self.telegram:
+                    await self.telegram.send_message(
+                        f"⏳ Schritt {i+1}/{len(steps)}: {step_desc[:80]}",
+                        chat_id=chat_id or None,
+                    )
+
+                enriched = (
+                    f"{self._build_system_context()}\n"
+                    f"Gesamtaufgabe: {title}\n"
+                    f"Aktueller Schritt ({i+1}/{len(steps)}): {step_desc}\n"
+                )
+                if accumulated_context:
+                    enriched += f"\nErgebnisse vorheriger Schritte:\n{accumulated_context[:3000]}\n"
+
+                sub = SubAgent(
+                    agent_type=agent_type, task_description=enriched,
+                    llm=self._get_llm_for("content"), tools=self.tools, db=self.db,
+                )
+                sub._progress_callback = self._make_progress_callback(sub.agent_id, step_desc, chat_id)
+
+                if self.ws_callback:
+                    await self.ws_callback({
+                        "type": "agent_spawned", "agent_id": sub.agent_id,
+                        "agent_type": agent_type, "task": f"[{i+1}/{len(steps)}] {step_desc[:60]}",
+                    })
+
+                try:
+                    result = await sub.run()
+                    accumulated_context += f"\n### Schritt {i+1}: {step_desc}\n{result[:2000]}\n"
+
+                    if self.ws_callback:
+                        await self.ws_callback({"type": "agent_done", "agent_id": sub.agent_id, "task": step_desc[:60]})
+                except Exception as e:
+                    accumulated_context += f"\n### Schritt {i+1}: FEHLER — {e}\n"
+                    if self.ws_callback:
+                        await self.ws_callback({"type": "agent_error", "agent_id": sub.agent_id, "error": str(e)})
+
+            # Save final result
+            await self.db.update_task_result(parent_task_id, accumulated_context[:5000])
+            await self.db.update_task_status(parent_task_id, TaskStatus.DONE)
+
+            if self._obsidian_enabled():
+                try:
+                    await asyncio.to_thread(
+                        self.obsidian_writer.write_result,
+                        title=title, typ="report", content=accumulated_context, project=project,
+                    )
+                except Exception:
+                    pass
+
+            if self.telegram:
+                summary = accumulated_context[:500] + ("..." if len(accumulated_context) > 500 else "")
+                await self.telegram.send_message(f"✅ Fertig: {title}\n\n{summary}", chat_id=chat_id or None)
+
+        except Exception as e:
+            if self.telegram:
+                await self.telegram.send_message(f"❌ Multi-Step Fehler: {e}", chat_id=chat_id or None)
 
     async def handle_scheduled(self, task: dict) -> None:
         """Run a scheduled task through a SubAgent with full visibility."""
