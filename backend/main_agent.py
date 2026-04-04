@@ -135,6 +135,8 @@ class MainAgent:
             title=title, typ=result_type, agent=agent_type,
         )
         self.obsidian_writer.kanban_move(title, "backlog")
+        # Remove from Inbox if it was there
+        self.obsidian_writer.remove_from_inbox(original_text)
 
         if self.telegram:
             await self.telegram.send_message(
@@ -146,9 +148,16 @@ class MainAgent:
         self.obsidian_writer.kanban_move(title, "in_progress")
         self.obsidian_writer.update_task_status(task_path, "in_progress")
 
+        # Build enriched task description for the SubAgent
+        enriched_desc = (
+            f"Aufgabe: {title}\n"
+            f"Typ: {result_type}\n"
+            f"Details: {original_text}\n\n"
+            f"Erstelle ein ausführliches, strukturiertes Ergebnis auf Deutsch."
+        )
         sub = SubAgent(
             agent_type=agent_type,
-            task_description=original_text,
+            task_description=enriched_desc,
             llm=self.llm,
             tools=self.tools,
             db=self.db,

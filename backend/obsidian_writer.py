@@ -90,6 +90,21 @@ class ObsidianWriter:
 
         self.kanban_path.write_text(text, encoding="utf-8")
 
+    def remove_from_inbox(self, text: str):
+        """Remove or check off a matching todo from Inbox.md."""
+        inbox_path = self.kanban_path.parent / "Inbox.md"
+        if not inbox_path.exists():
+            return
+        content = inbox_path.read_text(encoding="utf-8")
+        lines = content.splitlines()
+        new_lines = []
+        for line in lines:
+            # Match unchecked todos that contain the text
+            if line.strip().startswith("- [ ]") and text.strip() in line:
+                continue  # Remove the line
+            new_lines.append(line)
+        inbox_path.write_text("\n".join(new_lines), encoding="utf-8")
+
     def write_result(self, title: str, typ: str, content: str) -> Path:
         subdir = self.map_result_type(typ)
         today = datetime.date.today().isoformat()
