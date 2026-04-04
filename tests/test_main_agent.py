@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from backend.main_agent import MainAgent
-from backend.scheduler import ScheduledTask
+from backend.scheduler import ScheduledTask, Scheduler
 
 
 @pytest.fixture
@@ -82,7 +82,7 @@ async def test_handle_quick_reply(agent, mock_llm, mock_telegram):
 
 @pytest.mark.asyncio
 async def test_handle_task_sends_confirmation(agent, mock_llm, mock_telegram, mock_db):
-    mock_llm.chat = AsyncMock(return_value='{"type": "task", "agent": "coder", "result_type": "code", "title": "Backup Script"}')
+    mock_llm.chat = AsyncMock(return_value='{"type": "content", "agent": "coder", "result_type": "code", "title": "Backup Script"}')
     with patch("backend.main_agent.SubAgent") as MockSub:
         mock_sub = AsyncMock()
         mock_sub.run = AsyncMock(return_value="Script erstellt: rsync ...")
@@ -90,12 +90,33 @@ async def test_handle_task_sends_confirmation(agent, mock_llm, mock_telegram, mo
         mock_sub.agent_type = "coder"
         MockSub.return_value = mock_sub
         await agent.handle_message("Schreib ein Backup Script", chat_id="123")
+        # Background task needs a tick to run
+        await asyncio.sleep(0.1)
     assert mock_telegram.send_message.call_count >= 1
 
 
 @pytest.mark.asyncio
+async def test_action_no_obsidian_report(agent, mock_llm, mock_telegram, mock_db, mock_obsidian_writer):
+    """Action tasks should NOT write a report to Obsidian."""
+    mock_llm.chat = AsyncMock(return_value='{"type": "action", "agent": "ops", "title": "Schedule optimieren"}')
+    with patch("backend.main_agent.SubAgent") as MockSub:
+        mock_sub = AsyncMock()
+        mock_sub.run = AsyncMock(return_value="Schedule-Dateien angepasst.")
+        mock_sub.agent_id = "sub_ops_abc123"
+        MockSub.return_value = mock_sub
+        await agent.handle_message("Optimiere die Schedules", chat_id="123")
+        # Background task needs a tick to run
+        await asyncio.sleep(0.1)
+    mock_obsidian_writer.write_result.assert_not_called()
+    mock_obsidian_writer.create_task_note.assert_not_called()
+    assert mock_telegram.send_message.call_count >= 1
+    sent = mock_telegram.send_message.call_args[0][0]
+    assert "Erledigt" in sent
+
+
+@pytest.mark.asyncio
 async def test_active_agents_tracking(agent, mock_llm):
-    mock_llm.chat = AsyncMock(return_value='{"type": "task", "agent": "coder", "result_type": "code", "title": "Test"}')
+    mock_llm.chat = AsyncMock(return_value='{"type": "content", "agent": "coder", "result_type": "code", "title": "Test"}')
     with patch("backend.main_agent.SubAgent") as MockSub:
         mock_sub = AsyncMock()
         mock_sub.run = AsyncMock(return_value="Done")
@@ -105,6 +126,8 @@ async def test_active_agents_tracking(agent, mock_llm):
         MockSub.return_value = mock_sub
         assert len(agent.active_agents) == 0
         await agent.handle_message("Test task", chat_id="123")
+        # Background task needs a tick to run and clean up
+        await asyncio.sleep(0.1)
         assert len(agent.active_agents) == 0
 
 
@@ -112,6 +135,68 @@ def test_get_status(agent):
     status = agent.get_status()
     assert "active_agents" in status
     assert isinstance(status["active_agents"], list)
+
+
+# ── /command tests ──────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_cmd_help(agent, mock_telegram):
+    await agent.handle_message("/help", chat_id="123")
+    mock_telegram.send_message.assert_called_once()
+    text = mock_telegram.send_message.call_args[0][0]
+    assert "/status" in text
+    assert "/help" in text
+
+
+@pytest.mark.asyncio
+async def test_cmd_status_no_agents(agent, mock_telegram, mock_db):
+    mock_db.get_open_tasks = AsyncMock(return_value=[])
+    await agent.handle_message("/status", chat_id="123")
+    text = mock_telegram.send_message.call_args[0][0]
+    assert "Keine aktiven Agents" in text
+
+
+@pytest.mark.asyncio
+async def test_cmd_tasks_empty(agent, mock_telegram, mock_db):
+    mock_db.get_open_tasks = AsyncMock(return_value=[])
+    await agent.handle_message("/tasks", chat_id="123")
+    text = mock_telegram.send_message.call_args[0][0]
+    assert "Keine offenen Tasks" in text
+
+
+@pytest.mark.asyncio
+async def test_cmd_cancel_no_agents(agent, mock_telegram):
+    await agent.handle_message("/cancel", chat_id="123")
+    text = mock_telegram.send_message.call_args[0][0]
+    assert "Keine aktiven Agents" in text
+
+
+@pytest.mark.asyncio
+async def test_cmd_cancel_removes_agent(agent, mock_telegram, mock_db):
+    agent.active_agents["sub_coder_xyz"] = {
+        "type": "coder", "task": "Test", "task_id": 1,
+    }
+    await agent.handle_message("/cancel sub_coder_xyz", chat_id="123")
+    text = mock_telegram.send_message.call_args[0][0]
+    assert "abgebrochen" in text
+    assert "sub_coder_xyz" not in agent.active_agents
+
+
+@pytest.mark.asyncio
+async def test_cmd_does_not_hit_llm(agent, mock_llm, mock_telegram, mock_db):
+    """Slash commands should NOT call the LLM."""
+    mock_db.get_open_tasks = AsyncMock(return_value=[])
+    await agent.handle_message("/status", chat_id="123")
+    mock_llm.chat.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_unknown_cmd_falls_through_to_llm(agent, mock_llm, mock_telegram):
+    """Unknown /commands are not handled — falls through to classify."""
+    mock_llm.chat = AsyncMock(return_value='{"type": "quick_reply", "answer": "Hmm?"}')
+    await agent.handle_message("/unknown_xyz", chat_id="123")
+    mock_llm.chat.assert_called_once()
 
 
 def _make_scheduled_task(name="Heartbeat", schedule="stündlich", agent="ops",
@@ -157,3 +242,119 @@ async def test_handle_scheduled_with_report(agent, mock_telegram, mock_obsidian_
     sent_text = mock_telegram.send_message.call_args[0][0]
     assert "Daily Check" in sent_text
     assert "Systemstatus" in sent_text
+
+
+# ── /schedule command tests ──────────────────────────────────
+
+
+@pytest.fixture
+def mock_scheduler(tmp_path):
+    sched = MagicMock(spec=Scheduler)
+    sched.schedules_dir = tmp_path / "Schedules"
+    sched.schedules_dir.mkdir()
+    sched.tasks = {}
+    sched.get_all_tasks_info = MagicMock(return_value=[])
+    sched.reload_tasks = MagicMock()
+    sched.toggle_task = MagicMock(return_value=True)
+    return sched
+
+
+@pytest.fixture
+def agent_with_scheduler(mock_llm, mock_tools, mock_db, mock_obsidian_writer, mock_telegram, mock_scheduler):
+    return MainAgent(
+        llm=mock_llm,
+        tools=mock_tools,
+        db=mock_db,
+        obsidian_writer=mock_obsidian_writer,
+        telegram=mock_telegram,
+        scheduler=mock_scheduler,
+    )
+
+
+@pytest.mark.asyncio
+async def test_schedule_list_empty(agent_with_scheduler, mock_telegram):
+    await agent_with_scheduler.handle_message("/schedule list", chat_id="123")
+    text = mock_telegram.send_message.call_args[0][0]
+    assert "Keine Schedules" in text
+
+
+@pytest.mark.asyncio
+async def test_schedule_list_with_tasks(agent_with_scheduler, mock_telegram, mock_scheduler):
+    mock_scheduler.get_all_tasks_info.return_value = [
+        {"name": "Morning Briefing", "schedule": "täglich 08:00", "agent": "researcher",
+         "active": True, "next_run": "2026-04-05T08:00:00", "last_run": None, "active_hours": None},
+    ]
+    await agent_with_scheduler.handle_message("/schedule list", chat_id="123")
+    text = mock_telegram.send_message.call_args[0][0]
+    assert "Morning Briefing" in text
+    assert "täglich 08:00" in text
+
+
+@pytest.mark.asyncio
+async def test_schedule_create(agent_with_scheduler, mock_llm, mock_telegram, mock_scheduler):
+    # LLM returns metadata and enriched prompt
+    mock_llm.chat = AsyncMock(side_effect=[
+        '{"schedule": "täglich 09:00", "agent": "researcher", "name": "KI News Analyse", "active_hours": ""}',
+        "Analysiere die aktuellen KI-Nachrichten des Tages. Berücksichtige folgende Aspekte:\n"
+        "1. Neue Modelle und Releases\n2. Forschungsdurchbrüche\n3. Regulierung und Politik",
+    ])
+    await agent_with_scheduler.handle_message(
+        "/schedule create Erstelle täglich eine Analyse der aktuellen KI-News",
+        chat_id="123",
+    )
+    # File should be created
+    files = list(mock_scheduler.schedules_dir.glob("*.md"))
+    assert len(files) == 1
+    content = files[0].read_text()
+    assert "name: KI News Analyse" in content
+    assert "schedule: täglich 09:00" in content
+    assert "Analysiere" in content
+    # Scheduler reloaded
+    mock_scheduler.reload_tasks.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_schedule_create_empty(agent_with_scheduler, mock_telegram):
+    await agent_with_scheduler.handle_message("/schedule create", chat_id="123")
+    text = mock_telegram.send_message.call_args[0][0]
+    assert "Was soll der Schedule tun?" in text
+
+
+@pytest.mark.asyncio
+async def test_schedule_toggle(agent_with_scheduler, mock_telegram, mock_scheduler):
+    task = MagicMock()
+    task.name = "Heartbeat"
+    task.file_path = Path("/tmp/heartbeat.md")
+    mock_scheduler.tasks = {"heartbeat.md": task}
+    await agent_with_scheduler.handle_message("/schedule toggle heartbeat", chat_id="123")
+    text = mock_telegram.send_message.call_args[0][0]
+    assert "aktiviert" in text or "pausiert" in text
+
+
+@pytest.mark.asyncio
+async def test_schedule_delete(agent_with_scheduler, mock_telegram, mock_scheduler, tmp_path):
+    fpath = tmp_path / "Schedules" / "test-task.md"
+    fpath.write_text("---\nname: Test\n---\nPrompt")
+    task = MagicMock()
+    task.name = "Test Task"
+    task.file_path = fpath
+    mock_scheduler.tasks = {"test-task.md": task}
+    await agent_with_scheduler.handle_message("/schedule delete test", chat_id="123")
+    text = mock_telegram.send_message.call_args[0][0]
+    assert "gelöscht" in text
+    assert not fpath.exists()
+
+
+@pytest.mark.asyncio
+async def test_schedule_no_scheduler(agent, mock_telegram):
+    """Agent without scheduler returns error."""
+    await agent.handle_message("/schedule list", chat_id="123")
+    text = mock_telegram.send_message.call_args[0][0]
+    assert "nicht aktiv" in text
+
+
+@pytest.mark.asyncio
+async def test_schedule_unknown_subcommand(agent_with_scheduler, mock_telegram):
+    await agent_with_scheduler.handle_message("/schedule xyz", chat_id="123")
+    text = mock_telegram.send_message.call_args[0][0]
+    assert "Nutzung" in text

@@ -553,11 +553,14 @@ class MainAgent:
                     extract_and_store_facts(self.llm, self.fact_memory, text, answer)
                 )
         elif msg_type == "action":
-            await self._handle_action(classification, text, chat_id, project=project_hint)
+            asyncio.create_task(self._handle_action(classification, text, chat_id, project=project_hint))
+            return classification.get("title", "Agent gestartet")
         elif msg_type == "content":
-            await self._handle_content(classification, text, chat_id, project=project_hint)
+            asyncio.create_task(self._handle_content(classification, text, chat_id, project=project_hint))
+            return classification.get("title", "Agent gestartet")
         elif msg_type == "task":
-            await self._handle_content(classification, text, chat_id, project=project_hint)
+            asyncio.create_task(self._handle_content(classification, text, chat_id, project=project_hint))
+            return classification.get("title", "Agent gestartet")
 
     def _get_llm_for(self, task_type: str):
         """Get the right LLM for a task type via router, fallback to default."""
@@ -585,160 +588,174 @@ class MainAgent:
 
     async def _handle_action(self, classification: dict, original_text: str, chat_id: str, project: str | None = None):
         """Handle action tasks — execute and report back, NO Obsidian report."""
-        agent_type = classification.get("agent", "ops")
-        title = classification.get("title", original_text[:80])
-
-        task = TaskData(title=title, description=original_text, status=TaskStatus.OPEN)
-        task_id = await self.db.create_task(task)
-
-        if self.telegram:
-            await self.telegram.send_message(
-                f"👍 Mache ich: {title}",
-                chat_id=chat_id or None,
-            )
-
-        await self.db.update_task_status(task_id, TaskStatus.IN_PROGRESS, agent_type)
-
-        sys_context = self._build_system_context()
-        enriched_desc = (
-            f"{sys_context}\n"
-            f"Aufgabe: {title}\n"
-            f"Details: {original_text}\n\n"
-            f"WICHTIG: Führe die Aufgabe direkt aus. Nutze deine Tools um Dateien zu lesen, "
-            f"zu bearbeiten und Befehle auszuführen. Schreibe KEINEN Report oder Guide — "
-            f"tu einfach was verlangt wird. Antworte am Ende kurz was du gemacht hast."
-        )
-        sub = SubAgent(
-            agent_type=agent_type,
-            task_description=enriched_desc,
-            llm=self._get_llm_for("action"),
-            tools=self.tools,
-            db=self.db,
-        )
-        self.active_agents[sub.agent_id] = {
-            "type": agent_type, "task": title,
-            "task_id": task_id, "sub_agent": sub,
-        }
-
-        if self.ws_callback:
-            await self.ws_callback({
-                "type": "agent_spawned", "agent_id": sub.agent_id,
-                "agent_type": agent_type, "task": title,
-            })
-
         try:
-            result = await sub.run()
-            await self.db.update_task_result(task_id, result[:5000])
-            await self.db.update_task_status(task_id, TaskStatus.DONE)
+            agent_type = classification.get("agent", "ops")
+            title = classification.get("title", original_text[:80])
+
+            task = TaskData(title=title, description=original_text, status=TaskStatus.OPEN)
+            task_id = await self.db.create_task(task)
 
             if self.telegram:
-                summary = result[:800] if len(result) <= 800 else result[:797] + "..."
                 await self.telegram.send_message(
-                    f"✅ Erledigt: {title}\n\n{summary}",
+                    f"👍 Mache ich: {title}",
                     chat_id=chat_id or None,
                 )
+
+            await self.db.update_task_status(task_id, TaskStatus.IN_PROGRESS, agent_type)
+
+            sys_context = self._build_system_context()
+            enriched_desc = (
+                f"{sys_context}\n"
+                f"Aufgabe: {title}\n"
+                f"Details: {original_text}\n\n"
+                f"WICHTIG: Führe die Aufgabe direkt aus. Nutze deine Tools um Dateien zu lesen, "
+                f"zu bearbeiten und Befehle auszuführen. Schreibe KEINEN Report oder Guide — "
+                f"tu einfach was verlangt wird. Antworte am Ende kurz was du gemacht hast."
+            )
+            sub = SubAgent(
+                agent_type=agent_type,
+                task_description=enriched_desc,
+                llm=self._get_llm_for("action"),
+                tools=self.tools,
+                db=self.db,
+            )
+            self.active_agents[sub.agent_id] = {
+                "type": agent_type, "task": title,
+                "task_id": task_id, "sub_agent": sub,
+            }
 
             if self.ws_callback:
                 await self.ws_callback({
-                    "type": "agent_done", "agent_id": sub.agent_id,
+                    "type": "agent_spawned", "agent_id": sub.agent_id,
                     "agent_type": agent_type, "task": title,
                 })
 
+            try:
+                result = await sub.run()
+                await self.db.update_task_result(task_id, result[:5000])
+                await self.db.update_task_status(task_id, TaskStatus.DONE)
+
+                if self.telegram:
+                    summary = result[:800] if len(result) <= 800 else result[:797] + "..."
+                    await self.telegram.send_message(
+                        f"✅ Erledigt: {title}\n\n{summary}",
+                        chat_id=chat_id or None,
+                    )
+
+                if self.ws_callback:
+                    await self.ws_callback({
+                        "type": "agent_done", "agent_id": sub.agent_id,
+                        "agent_type": agent_type, "task": title,
+                    })
+
+            except Exception as e:
+                await self.db.update_task_status(task_id, TaskStatus.FAILED)
+                if self.telegram:
+                    await self.telegram.send_message(
+                        f"❌ Fehler bei: {title}\n{str(e)[:300]}",
+                        chat_id=chat_id or None,
+                    )
+            finally:
+                self.active_agents.pop(sub.agent_id, None)
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
-            await self.db.update_task_status(task_id, TaskStatus.FAILED)
+            error_msg = f"❌ Agent-Fehler: {e}"
             if self.telegram:
-                await self.telegram.send_message(
-                    f"❌ Fehler bei: {title}\n{str(e)[:300]}",
-                    chat_id=chat_id or None,
-                )
-        finally:
-            self.active_agents.pop(sub.agent_id, None)
+                await self.telegram.send_message(error_msg[:4000], chat_id=chat_id or None)
 
     async def _handle_content(self, classification: dict, original_text: str, chat_id: str, project: str | None = None):
         """Handle content tasks — research/write and save result to Obsidian."""
-        agent_type = classification.get("agent", "researcher")
-        result_type = classification.get("result_type", "report")
-        title = classification.get("title", original_text[:80])
-
-        task = TaskData(title=title, description=original_text, status=TaskStatus.OPEN)
-        task_id = await self.db.create_task(task)
-
-        task_path = self.obsidian_writer.create_task_note(
-            title=title, typ=result_type, agent=agent_type,
-        )
-        self.obsidian_writer.kanban_move(title, "backlog")
-        self.obsidian_writer.remove_from_inbox(original_text)
-
-        if self.telegram:
-            await self.telegram.send_message(
-                f"👍 Arbeite daran: {title}\n🤖 Agent: {agent_type}",
-                chat_id=chat_id or None,
-            )
-
-        await self.db.update_task_status(task_id, TaskStatus.IN_PROGRESS, agent_type)
-        self.obsidian_writer.kanban_move(title, "in_progress")
-        self.obsidian_writer.update_task_status(task_path, "in_progress")
-
-        sys_context = self._build_system_context()
-        enriched_desc = (
-            f"{sys_context}\n"
-            f"Aufgabe: {title}\n"
-            f"Typ: {result_type}\n"
-            f"Details: {original_text}\n\n"
-            f"Erstelle ein ausführliches, strukturiertes Ergebnis auf Deutsch."
-        )
-        sub = SubAgent(
-            agent_type=agent_type,
-            task_description=enriched_desc,
-            llm=self._get_llm_for("content"),
-            tools=self.tools,
-            db=self.db,
-        )
-        self.active_agents[sub.agent_id] = {
-            "type": agent_type, "task": title,
-            "task_id": task_id, "sub_agent": sub,
-        }
-
-        if self.ws_callback:
-            await self.ws_callback({
-                "type": "agent_spawned", "agent_id": sub.agent_id,
-                "agent_type": agent_type, "task": title,
-            })
-
         try:
-            result = await sub.run()
+            agent_type = classification.get("agent", "researcher")
+            result_type = classification.get("result_type", "report")
+            title = classification.get("title", original_text[:80])
 
-            self.obsidian_writer.write_result(
-                title=title, typ=result_type, content=result, project=project,
+            task = TaskData(title=title, description=original_text, status=TaskStatus.OPEN)
+            task_id = await self.db.create_task(task)
+
+            task_path = self.obsidian_writer.create_task_note(
+                title=title, typ=result_type, agent=agent_type,
             )
-
-            await self.db.update_task_result(task_id, result[:5000])
-            await self.db.update_task_status(task_id, TaskStatus.DONE)
-            self.obsidian_writer.kanban_move(title, "done")
-            self.obsidian_writer.update_task_status(task_path, "done")
+            self.obsidian_writer.kanban_move(title, "backlog")
+            self.obsidian_writer.remove_from_inbox(original_text)
 
             if self.telegram:
-                summary = result[:500] if len(result) <= 500 else result[:497] + "..."
                 await self.telegram.send_message(
-                    f"✅ Fertig: {title}\n\n{summary}\n\n📁 Ergebnis in Obsidian",
+                    f"👍 Arbeite daran: {title}\n🤖 Agent: {agent_type}",
                     chat_id=chat_id or None,
                 )
+
+            await self.db.update_task_status(task_id, TaskStatus.IN_PROGRESS, agent_type)
+            self.obsidian_writer.kanban_move(title, "in_progress")
+            self.obsidian_writer.update_task_status(task_path, "in_progress")
+
+            sys_context = self._build_system_context()
+            enriched_desc = (
+                f"{sys_context}\n"
+                f"Aufgabe: {title}\n"
+                f"Typ: {result_type}\n"
+                f"Details: {original_text}\n\n"
+                f"Erstelle ein ausführliches, strukturiertes Ergebnis auf Deutsch."
+            )
+            sub = SubAgent(
+                agent_type=agent_type,
+                task_description=enriched_desc,
+                llm=self._get_llm_for("content"),
+                tools=self.tools,
+                db=self.db,
+            )
+            self.active_agents[sub.agent_id] = {
+                "type": agent_type, "task": title,
+                "task_id": task_id, "sub_agent": sub,
+            }
 
             if self.ws_callback:
                 await self.ws_callback({
-                    "type": "agent_done", "agent_id": sub.agent_id,
+                    "type": "agent_spawned", "agent_id": sub.agent_id,
                     "agent_type": agent_type, "task": title,
                 })
 
-        except Exception as e:
-            await self.db.update_task_status(task_id, TaskStatus.FAILED)
-            if self.telegram:
-                await self.telegram.send_message(
-                    f"❌ Fehler bei: {title}\n{str(e)[:300]}",
-                    chat_id=chat_id or None,
+            try:
+                result = await sub.run()
+
+                self.obsidian_writer.write_result(
+                    title=title, typ=result_type, content=result, project=project,
                 )
-        finally:
-            self.active_agents.pop(sub.agent_id, None)
+
+                await self.db.update_task_result(task_id, result[:5000])
+                await self.db.update_task_status(task_id, TaskStatus.DONE)
+                self.obsidian_writer.kanban_move(title, "done")
+                self.obsidian_writer.update_task_status(task_path, "done")
+
+                if self.telegram:
+                    summary = result[:500] if len(result) <= 500 else result[:497] + "..."
+                    await self.telegram.send_message(
+                        f"✅ Fertig: {title}\n\n{summary}\n\n📁 Ergebnis in Obsidian",
+                        chat_id=chat_id or None,
+                    )
+
+                if self.ws_callback:
+                    await self.ws_callback({
+                        "type": "agent_done", "agent_id": sub.agent_id,
+                        "agent_type": agent_type, "task": title,
+                    })
+
+            except Exception as e:
+                await self.db.update_task_status(task_id, TaskStatus.FAILED)
+                if self.telegram:
+                    await self.telegram.send_message(
+                        f"❌ Fehler bei: {title}\n{str(e)[:300]}",
+                        chat_id=chat_id or None,
+                    )
+            finally:
+                self.active_agents.pop(sub.agent_id, None)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            error_msg = f"❌ Agent-Fehler: {e}"
+            if self.telegram:
+                await self.telegram.send_message(error_msg[:4000], chat_id=chat_id or None)
 
     async def handle_scheduled(self, task: ScheduledTask):
         """Run a scheduled task through a SubAgent. Suppress Telegram/Obsidian for HEARTBEAT_OK."""

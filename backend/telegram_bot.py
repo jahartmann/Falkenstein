@@ -78,7 +78,7 @@ class TelegramBot:
                 messages = await self.poll_updates()
                 for msg in messages:
                     for handler in self._handlers:
-                        await handler(msg)
+                        asyncio.create_task(handler(msg))
             except asyncio.CancelledError:
                 break
             except Exception:
