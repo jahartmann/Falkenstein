@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 SelfConfigTool — Falki can read/edit its own configuration files.
 Covers: .env, SOUL.md, CLAUDE.md, config files in the project directory.

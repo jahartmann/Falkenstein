@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from pathlib import Path
 from backend.tools.base import Tool, ToolResult
 from backend.llm_client import LLMClient
