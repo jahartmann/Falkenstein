@@ -186,3 +186,34 @@ async def put_settings(update: SettingsUpdate):
         "hot_reloaded": hot_reloaded,
         "restart_required": restart_required,
     }
+
+
+@router.get("/schedules")
+async def get_schedules():
+    from backend.main import scheduler
+    if not scheduler:
+        return {"tasks": []}
+    return {"tasks": scheduler.get_all_tasks_info()}
+
+
+@router.put("/schedules/{filename}/toggle")
+async def toggle_schedule(filename: str):
+    from backend.main import scheduler
+    if not scheduler:
+        return {"error": "Scheduler not initialized"}
+    new_state = scheduler.toggle_task(filename)
+    return {"active": new_state, "filename": filename}
+
+
+@router.post("/schedules/{filename}/run")
+async def run_schedule_now(filename: str):
+    import asyncio
+    from backend.main import scheduler, main_agent
+    if not scheduler or not main_agent:
+        return {"error": "Not initialized"}
+    task = scheduler.tasks.get(filename)
+    if not task:
+        return {"error": f"Task '{filename}' not found"}
+    scheduler.mark_run(task)
+    asyncio.create_task(main_agent.handle_scheduled(task))
+    return {"triggered": True, "name": task.name}

@@ -121,3 +121,11 @@ def test_put_settings_unknown_group(client):
     })
     data = resp.json()
     assert data["saved"] is False
+
+
+def test_get_schedules(client):
+    resp = client.get("/api/admin/schedules")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "tasks" in data
+    assert isinstance(data["tasks"], list)
