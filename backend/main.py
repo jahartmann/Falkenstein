@@ -16,7 +16,6 @@ from backend.ws_manager import WSManager
 from backend.telegram_bot import TelegramBot
 from backend.main_agent import MainAgent
 from backend.obsidian_writer import ObsidianWriter
-from backend.scheduler import Scheduler
 from backend.smart_scheduler import SmartScheduler
 from backend.memory.soul_memory import SoulMemory
 from backend.review_gate import ReviewGate
