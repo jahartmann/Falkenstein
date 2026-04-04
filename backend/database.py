@@ -231,6 +231,7 @@ class Database:
         return cursor.lastrowid
 
     def _row_to_task(self, row: aiosqlite.Row) -> TaskData:
+        keys = row.keys() if hasattr(row, "keys") else []
         return TaskData(
             id=row["id"],
             title=row["title"],
@@ -240,6 +241,8 @@ class Database:
             project=row["project"],
             parent_task_id=row["parent_task_id"],
             result=row["result"],
+            created_at=row["created_at"] if "created_at" in keys else None,
+            updated_at=row["updated_at"] if "updated_at" in keys else None,
         )
 
     async def get_task(self, task_id: int) -> TaskData | None:

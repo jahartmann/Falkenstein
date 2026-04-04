@@ -60,6 +60,8 @@ class TaskData(BaseModel):
     project: str | None = None
     parent_task_id: int | None = None
     result: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
 
 
 class MessageData(BaseModel):

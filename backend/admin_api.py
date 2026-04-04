@@ -4,6 +4,8 @@ import time
 from fastapi import APIRouter
 from pydantic import BaseModel
 
+from backend.models import TaskStatus
+
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 _start_time: float = 0.0
@@ -15,13 +17,16 @@ _config_service = None
 _main_agent = None
 _budget_tracker = None
 _llm_router = None
+_fact_memory = None
 
 
 def set_dependencies(db=None, scheduler=None, config_service=None,
-                     main_agent=None, budget_tracker=None, llm_router=None):
-    global _db, _scheduler, _config_service, _main_agent, _budget_tracker, _llm_router
+                     main_agent=None, budget_tracker=None, llm_router=None,
+                     fact_memory=None):
+    global _db, _scheduler, _config_service, _main_agent, _budget_tracker, _llm_router, _fact_memory
     _db = db; _scheduler = scheduler; _config_service = config_service
     _main_agent = main_agent; _budget_tracker = budget_tracker; _llm_router = llm_router
+    _fact_memory = fact_memory
 
 
 def init(start_time: float):
@@ -55,6 +60,10 @@ class ScheduleAICreate(BaseModel):
 
 class TaskSubmit(BaseModel):
     text: str
+
+
+class TaskPatch(BaseModel):
+    status: str
 
 
 class ConfigBatchUpdate(BaseModel):
@@ -277,27 +286,56 @@ async def put_config(data: ConfigBatchUpdate):
 # ── Tasks ────────────────────────────────────────────────────────────
 
 @router.get("/tasks")
-async def get_all_tasks():
-    """Get all tasks (not just open ones) with pagination."""
-    if not _db or not _db._conn:
-        return {"tasks": []}
-    cursor = await _db._conn.execute(
-        "SELECT id, title, description, status, assigned_to, result, created_at "
-        "FROM tasks ORDER BY id DESC LIMIT 50"
-    )
-    rows = await cursor.fetchall()
+async def get_tasks(status: str | None = None, agent: str | None = None,
+                    search: str | None = None, limit: int = 50, offset: int = 0):
+    """Get tasks with optional filters and pagination."""
+    tasks = await _db.get_all_tasks(limit=limit, offset=offset, status=status, agent=agent, search=search)
+    total = await _db.get_task_count(status=status, agent=agent, search=search)
     return {
         "tasks": [
             {
-                "id": r["id"], "title": r["title"],
-                "description": r["description"] or "",
-                "status": r["status"], "agent": r["assigned_to"] or "",
-                "result": (r["result"] or "")[:500],
-                "created_at": r["created_at"] or "",
+                "id": t.id, "title": t.title, "description": t.description,
+                "status": t.status.value, "agent": t.assigned_to or "",
+                "result": t.result or "", "project": t.project or "",
+                "created_at": str(t.created_at) if t.created_at else "",
+                "updated_at": str(t.updated_at) if t.updated_at else "",
             }
-            for r in rows
-        ]
+            for t in tasks
+        ],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
     }
+
+
+@router.get("/tasks/{task_id}")
+async def get_single_task(task_id: int):
+    """Get a single task with full result."""
+    task = await _db.get_task(task_id)
+    if not task:
+        return {"error": "Task not found"}
+    return {
+        "id": task.id, "title": task.title, "description": task.description,
+        "status": task.status.value, "agent": task.assigned_to or "",
+        "result": task.result or "", "project": task.project or "",
+        "created_at": str(task.created_at) if task.created_at else "",
+        "updated_at": str(task.updated_at) if task.updated_at else "",
+    }
+
+
+@router.patch("/tasks/{task_id}")
+async def patch_task(task_id: int, patch: TaskPatch):
+    """Manually update task status from dashboard."""
+    status = TaskStatus(patch.status)
+    updated = await _db.update_task_status_manual(task_id, status)
+    return {"updated": updated}
+
+
+@router.delete("/tasks/{task_id}")
+async def delete_task(task_id: int):
+    """Delete a task."""
+    deleted = await _db.delete_task(task_id)
+    return {"deleted": deleted}
 
 
 @router.post("/tasks/submit")
@@ -314,10 +352,9 @@ async def submit_task(data: TaskSubmit):
 @router.get("/memory")
 async def get_memory():
     """Get all stored facts from Falki's memory."""
-    from backend.main import fact_memory
-    if not fact_memory:
+    if not _fact_memory:
         return {"facts": []}
-    facts = await fact_memory.get_all_active()
+    facts = await _fact_memory.get_all_active()
     return {
         "facts": [
             {"id": f.id, "category": f.category, "content": f.content, "source": f.source}
