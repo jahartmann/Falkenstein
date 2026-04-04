@@ -1,6 +1,5 @@
 import asyncio
 import json
-import re
 from pathlib import Path
 from backend.sub_agent import SubAgent
 from backend.obsidian_writer import ObsidianWriter
@@ -8,25 +7,6 @@ from backend.models import TaskData, TaskStatus
 from backend.scheduler import Scheduler
 
 
-def _parse_frontmatter(text: str) -> tuple[dict, str]:
-    """Parse YAML frontmatter from markdown text. Returns (metadata, body)."""
-    if not text.startswith("---"):
-        return {}, text
-    parts = text.split("---", 2)
-    if len(parts) < 3:
-        return {}, text
-    meta = {}
-    for line in parts[1].strip().splitlines():
-        if ":" in line:
-            key, val = line.split(":", 1)
-            key = key.strip()
-            val = val.strip()
-            if val.lower() in ("true", "false"):
-                val = val.lower() == "true"
-            elif val.isdigit():
-                val = int(val)
-            meta[key] = val
-    return meta, parts[2].strip()
 from backend.memory.fact_memory import FactMemory, extract_and_store_facts
 from backend.llm_router import LLMRouter
 
@@ -80,7 +60,8 @@ class MainAgent:
     def __init__(self, llm, tools, db, obsidian_writer: ObsidianWriter,
                  telegram=None, ws_callback=None, fact_memory: FactMemory | None = None,
                  scheduler: Scheduler | None = None,
-                 llm_router: LLMRouter | None = None):
+                 llm_router: LLMRouter | None = None,
+                 config_service=None):
         self.llm = llm
         self.llm_router = llm_router
         self.tools = tools
@@ -90,73 +71,33 @@ class MainAgent:
         self.ws_callback = ws_callback
         self.fact_memory = fact_memory
         self.scheduler = scheduler
+        self.config_service = config_service
         self.active_agents: dict[str, dict] = {}
         self._chat_history: dict[str, list[dict]] = {}
         self._max_history = 20
 
     async def _build_context(self) -> str:
-        """Build system context with current status for the classify prompt."""
-        lines = []
-        # Active agents
-        active = self.active_agents
-        if active:
-            agents_str = ", ".join(f"{v['type']}: {v['task']}" for v in active.values())
-            lines.append(f"Aktive Agents: {agents_str}")
-        else:
-            lines.append("Aktive Agents: keine")
+        """Build system context from DB for the classify prompt."""
+        parts = []
+        # Active agents from self.active_agents dict
+        if self.active_agents:
+            lines = ["Aktive Agents:"]
+            for aid, info in self.active_agents.items():
+                lines.append(f"  - {aid}: {info.get('task', '?')}")
+            parts.append("\n".join(lines))
         # Open tasks from DB
         try:
             open_tasks = await self.db.get_open_tasks()
             if open_tasks:
-                tasks_str = ", ".join(f"#{t.id} {t.title} ({t.status.value})" for t in open_tasks[:10])
-                lines.append(f"Offene Tasks DB ({len(open_tasks)}): {tasks_str}")
-            else:
-                lines.append("Offene Tasks DB: keine")
+                lines = ["Offene Tasks:"]
+                for t in open_tasks[:10]:
+                    title = t.title if hasattr(t, 'title') else t.get('title', '?')
+                    status = t.status if hasattr(t, 'status') else t.get('status', '?')
+                    lines.append(f"  - [{status}] {title}")
+                parts.append("\n".join(lines))
         except Exception:
             pass
-        # Obsidian Inbox + Kanban
-        try:
-            inbox = self.obsidian_writer.kanban_path.parent / "Inbox.md"
-            if inbox.exists():
-                content = inbox.read_text(encoding="utf-8")
-                todos = [l.strip() for l in content.splitlines() if l.strip().startswith("- [ ]")]
-                if todos:
-                    lines.append(f"Obsidian Inbox ({len(todos)} offen):")
-                    for t in todos[:10]:
-                        lines.append(f"  {t}")
-                else:
-                    lines.append("Obsidian Inbox: leer")
-            kanban = self.obsidian_writer.kanban_path
-            if kanban.exists():
-                content = kanban.read_text(encoding="utf-8")
-                backlog = []
-                in_progress = []
-                in_section = None
-                for line in content.splitlines():
-                    if line.startswith("## Backlog"):
-                        in_section = "backlog"
-                    elif line.startswith("## In Progress"):
-                        in_section = "in_progress"
-                    elif line.startswith("## "):
-                        in_section = None
-                    elif in_section and line.strip().startswith("- ["):
-                        if in_section == "backlog":
-                            backlog.append(line.strip())
-                        elif in_section == "in_progress":
-                            in_progress.append(line.strip())
-                if backlog:
-                    lines.append(f"Kanban Backlog ({len(backlog)}):")
-                    for t in backlog[:5]:
-                        lines.append(f"  {t}")
-                if in_progress:
-                    lines.append(f"Kanban In Progress ({len(in_progress)}):")
-                    for t in in_progress[:5]:
-                        lines.append(f"  {t}")
-                if not backlog and not in_progress:
-                    lines.append("Kanban: leer")
-        except Exception:
-            pass
-        return "\n".join(lines)
+        return "\n\n".join(parts) if parts else "Keine aktiven Tasks."
 
     async def classify(self, message: str) -> dict:
         context = await self._build_context()
@@ -192,7 +133,7 @@ class MainAgent:
     _COMMANDS: dict[str, str] = {
         "/status": "Aktive Agents + offene Tasks",
         "/tasks": "Offene Tasks aus der DB",
-        "/inbox": "Obsidian Inbox anzeigen",
+        "/inbox": "Offene Tasks anzeigen",
         "/memory": "Gespeicherte Fakten anzeigen",
         "/schedule": "Schedules verwalten (list/create/edit/toggle/delete/run)",
         "/cancel": "Agent abbrechen — /cancel <agent_id>",
@@ -240,20 +181,14 @@ class MainAgent:
             return f"Fehler beim Laden der Tasks: {e}"
 
     async def _cmd_inbox(self, chat_id: str) -> str:
-        try:
-            inbox = self.obsidian_writer.kanban_path.parent / "Inbox.md"
-            if not inbox.exists():
-                return "Keine Inbox-Datei gefunden."
-            content = inbox.read_text(encoding="utf-8")
-            todos = [l.strip() for l in content.splitlines() if l.strip().startswith("- [ ]")]
-            if not todos:
-                return "Inbox ist leer."
-            lines = [f"*Inbox ({len(todos)} Einträge):*"]
-            for t in todos[:20]:
-                lines.append(t)
-            return "\n".join(lines)
-        except Exception as e:
-            return f"Fehler beim Laden der Inbox: {e}"
+        tasks = await self.db.get_open_tasks()
+        if not tasks:
+            return "Keine offenen Tasks."
+        lines = ["Offene Tasks:"]
+        for t in tasks:
+            title = t.title if hasattr(t, 'title') else t.get('title', '?')
+            lines.append(f"  - {title}")
+        return "\n".join(lines)
 
     async def _cmd_memory(self, chat_id: str) -> str:
         if not self.fact_memory:
@@ -346,11 +281,7 @@ class MainAgent:
 
     async def _schedule_create(self, args: str, chat_id: str) -> str:
         if not args.strip():
-            return "Was soll der Schedule tun? Beispiel:\n`/schedule create Erstelle täglich eine Analyse der aktuellen KI-News`"
-
-        # Step 1: Extract metadata (schedule, agent, name)
-        if self.telegram:
-            await self.telegram.send_message("⏳ Erstelle Schedule...", chat_id=chat_id or None)
+            return "Bitte Beschreibung angeben: /schedule create <beschreibung>"
 
         meta, enriched = await asyncio.gather(
             self._extract_schedule_meta(args),
@@ -359,44 +290,21 @@ class MainAgent:
 
         name = meta.get("name", "Neuer Task")
         schedule = meta.get("schedule", "täglich 09:00")
-        agent = meta.get("agent", "researcher")
+        agent_type = meta.get("agent", "researcher")
         active_hours = meta.get("active_hours", "")
 
-        # Build the schedule file
-        slug = re.sub(r"[^\w\s-]", "", name.lower())
-        slug = re.sub(r"\s+", "-", slug.strip())[:60]
-        filename = f"{slug}.md"
-        filepath = self.scheduler.schedules_dir / filename
-
-        frontmatter_lines = [
-            "---",
-            f"name: {name}",
-            f"schedule: {schedule}",
-            f"agent: {agent}",
-            "active: true",
-        ]
-        if active_hours:
-            frontmatter_lines.append(f"active_hours: {active_hours}")
-        frontmatter_lines.append("---")
-
-        file_content = "\n".join(frontmatter_lines) + f"\n\n{enriched}\n"
-
-        # Write to Obsidian Schedules dir
-        filepath.parent.mkdir(parents=True, exist_ok=True)
-        filepath.write_text(file_content, encoding="utf-8")
-
-        # Reload scheduler
-        self.scheduler.reload_tasks()
-
-        return (
-            f"✅ Schedule erstellt: *{name}*\n"
-            f"📋 Schedule: {schedule}\n"
-            f"🤖 Agent: {agent}\n"
-            f"📁 Datei: {filename}\n\n"
-            f"*Generierter Prompt:*\n{enriched[:500]}"
+        await self.db.create_schedule(
+            name=name, schedule=schedule, agent_type=agent_type,
+            prompt=enriched, active=True, active_hours=active_hours or None,
         )
+        if self.scheduler:
+            await self.scheduler.reload_tasks()
+
+        return f"Schedule '{name}' erstellt ({schedule}, {agent_type})"
 
     async def _schedule_edit(self, args: str, chat_id: str) -> str:
+        if not self.scheduler:
+            return "Scheduler nicht aktiv."
         if "|" not in args:
             return "Format: `/schedule edit <Name> | <Änderung>`\nBeispiel: `/schedule edit Morning Briefing | schedule auf Mo-Fr 08:30 ändern`"
 
@@ -404,96 +312,81 @@ class MainAgent:
         name_query = name_part.strip().lower()
         change = change.strip()
 
-        # Find the task
-        found = None
-        for fname, task in self.scheduler.tasks.items():
-            if name_query in task.name.lower() or name_query in fname.lower():
-                found = task
-                break
-        if not found:
+        # Find the task in scheduler.tasks (list[dict])
+        task = next((t for t in self.scheduler.tasks if t["name"].lower() == name_query), None)
+        if not task:
+            # Fuzzy match
+            task = next((t for t in self.scheduler.tasks if name_query in t["name"].lower()), None)
+        if not task:
             return f"Schedule '{name_part.strip()}' nicht gefunden."
 
-        # Read current file
-        current_content = found.file_path.read_text(encoding="utf-8")
-        meta, body = _parse_frontmatter(current_content)
-
-        # Let LLM figure out what to change
+        # Let LLM figure out what to change — return JSON with updated fields
         edit_prompt = (
             f"Aktuelle Schedule-Konfiguration:\n"
-            f"Name: {found.name}\n"
-            f"Schedule: {found.schedule_str}\n"
-            f"Agent: {found.agent}\n"
-            f"Active Hours: {meta.get('active_hours', 'keine')}\n"
-            f"Aktueller Prompt:\n{body[:1000]}\n\n"
+            f"Name: {task['name']}\n"
+            f"Schedule: {task['schedule']}\n"
+            f"Agent: {task.get('agent_type', 'researcher')}\n"
+            f"Active Hours: {task.get('active_hours', 'keine')}\n"
+            f"Aktueller Prompt:\n{task.get('prompt', '')[:1000]}\n\n"
             f"Gewünschte Änderung: {change}\n\n"
-            f"Erstelle die aktualisierte Schedule-Datei im Markdown-Format mit YAML-Frontmatter. "
-            f"Gib NUR den kompletten Dateiinhalt zurück, nichts anderes."
+            f"Gib NUR ein JSON zurück mit den geänderten Feldern. "
+            f"Mögliche Felder: name, schedule, agent_type, prompt, active_hours.\n"
+            f"Beispiel: {{\"schedule\": \"Mo-Fr 08:30\"}}"
         )
-        new_content = await self.llm.chat(
+        response = await self.llm.chat(
             system_prompt=(
-                "Du bearbeitest Schedule-Dateien für einen KI-Assistenten. "
-                "Format: YAML-Frontmatter (name, schedule, agent, active, active_hours) + Prompt-Body. "
-                "Gib NUR den aktualisierten Dateiinhalt zurück."
+                "Du bearbeitest Schedule-Konfigurationen für einen KI-Assistenten. "
+                "Gib NUR ein JSON mit den geänderten Feldern zurück, nichts anderes."
             ),
             messages=[{"role": "user", "content": edit_prompt}],
             temperature=0.1,
         )
 
-        # Validate it has frontmatter
-        new_content = new_content.strip()
-        if not new_content.startswith("---"):
-            return f"Bearbeitung fehlgeschlagen — ungültiges Format. Bitte manuell in Obsidian anpassen."
+        try:
+            text = response.strip()
+            if "{" in text:
+                text = text[text.index("{"):text.rindex("}") + 1]
+            updates = json.loads(text)
+        except (json.JSONDecodeError, ValueError):
+            return "Bearbeitung fehlgeschlagen — ungültiges LLM-Ergebnis."
 
-        found.file_path.write_text(new_content + "\n", encoding="utf-8")
-        self.scheduler.reload_tasks()
+        await self.db.update_schedule(task["id"], **updates)
+        await self.scheduler.reload_tasks()
 
-        # Show what changed
-        new_meta, new_body = _parse_frontmatter(new_content)
-        return (
-            f"✏️ Schedule *{found.name}* aktualisiert:\n"
-            f"Schedule: {new_meta.get('schedule', '?')}\n"
-            f"Agent: {new_meta.get('agent', '?')}\n"
-            f"Active Hours: {new_meta.get('active_hours', 'keine')}"
-        )
+        return f"Schedule '{task['name']}' aktualisiert: {', '.join(f'{k}={v}' for k, v in updates.items())}"
 
     async def _schedule_toggle(self, args: str, chat_id: str) -> str:
-        name_query = args.strip().lower()
-        if not name_query:
-            return "Welchen Schedule? `/schedule toggle <Name>`"
-        for fname, task in self.scheduler.tasks.items():
-            if name_query in task.name.lower() or name_query in fname.lower():
-                new_state = self.scheduler.toggle_task(fname)
-                status = "aktiviert ✅" if new_state else "pausiert ⏸"
-                return f"Schedule *{task.name}* {status}."
-        return f"Schedule '{args.strip()}' nicht gefunden."
+        if not self.scheduler:
+            return "Scheduler nicht aktiv."
+        name = args.strip()
+        task = next((t for t in self.scheduler.tasks if t["name"].lower() == name.lower()), None)
+        if not task:
+            return f"Schedule '{name}' nicht gefunden."
+        new_state = await self.db.toggle_schedule(task["id"])
+        await self.scheduler.reload_tasks()
+        return f"Schedule '{name}' {'aktiviert' if new_state else 'pausiert'}."
 
     async def _schedule_delete(self, args: str, chat_id: str) -> str:
-        name_query = args.strip().lower()
-        if not name_query:
-            return "Welchen Schedule? `/schedule delete <Name>`"
-        for fname, task in self.scheduler.tasks.items():
-            if name_query in task.name.lower() or name_query in fname.lower():
-                if task.file_path.exists():
-                    task.file_path.unlink()
-                self.scheduler.reload_tasks()
-                return f"🗑 Schedule *{task.name}* gelöscht."
-        return f"Schedule '{args.strip()}' nicht gefunden."
+        if not self.scheduler:
+            return "Scheduler nicht aktiv."
+        name = args.strip()
+        task = next((t for t in self.scheduler.tasks if t["name"].lower() == name.lower()), None)
+        if not task:
+            return f"Schedule '{name}' nicht gefunden."
+        await self.db.delete_schedule(task["id"])
+        await self.scheduler.reload_tasks()
+        return f"Schedule '{name}' gelöscht."
 
     async def _schedule_run(self, args: str, chat_id: str) -> str:
-        name_query = args.strip().lower()
-        if not name_query:
-            return "Welchen Schedule? `/schedule run <Name>`"
-        for fname, task in self.scheduler.tasks.items():
-            if name_query in task.name.lower() or name_query in fname.lower():
-                if self.telegram:
-                    await self.telegram.send_message(
-                        f"▶️ Starte Schedule *{task.name}* manuell...",
-                        chat_id=chat_id or None,
-                    )
-                # Run async — don't block the command response
-                asyncio.create_task(self.handle_scheduled(task))
-                return f"Schedule *{task.name}* gestartet."
-        return f"Schedule '{args.strip()}' nicht gefunden."
+        if not self.scheduler:
+            return "Scheduler nicht aktiv."
+        name = args.strip()
+        task = next((t for t in self.scheduler.tasks if t["name"].lower() == name.lower()), None)
+        if not task:
+            return f"Schedule '{name}' nicht gefunden."
+        await self.scheduler.mark_run(task)
+        asyncio.create_task(self.handle_scheduled(task))
+        return f"Schedule '{name}' manuell gestartet."
 
     async def _cmd_cancel(self, args: str, chat_id: str) -> str:
         agent_id = args.strip()

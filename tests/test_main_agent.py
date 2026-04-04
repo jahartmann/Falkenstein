@@ -1,6 +1,5 @@
 import asyncio
 import json
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
@@ -250,12 +249,10 @@ async def test_handle_scheduled_with_report(agent, mock_telegram, mock_obsidian_
 @pytest.fixture
 def mock_scheduler(tmp_path):
     sched = MagicMock(spec=Scheduler)
-    sched.schedules_dir = tmp_path / "Schedules"
-    sched.schedules_dir.mkdir()
-    sched.tasks = {}
+    sched.tasks = []
     sched.get_all_tasks_info = MagicMock(return_value=[])
-    sched.reload_tasks = MagicMock()
-    sched.toggle_task = MagicMock(return_value=True)
+    sched.reload_tasks = AsyncMock()
+    sched.mark_run = AsyncMock()
     return sched
 
 
@@ -291,24 +288,25 @@ async def test_schedule_list_with_tasks(agent_with_scheduler, mock_telegram, moc
 
 
 @pytest.mark.asyncio
-async def test_schedule_create(agent_with_scheduler, mock_llm, mock_telegram, mock_scheduler):
+async def test_schedule_create(agent_with_scheduler, mock_llm, mock_telegram, mock_scheduler, mock_db):
     # LLM returns metadata and enriched prompt
     mock_llm.chat = AsyncMock(side_effect=[
         '{"schedule": "täglich 09:00", "agent": "researcher", "name": "KI News Analyse", "active_hours": ""}',
         "Analysiere die aktuellen KI-Nachrichten des Tages. Berücksichtige folgende Aspekte:\n"
         "1. Neue Modelle und Releases\n2. Forschungsdurchbrüche\n3. Regulierung und Politik",
     ])
+    mock_db.create_schedule = AsyncMock(return_value=1)
     await agent_with_scheduler.handle_message(
         "/schedule create Erstelle täglich eine Analyse der aktuellen KI-News",
         chat_id="123",
     )
-    # File should be created
-    files = list(mock_scheduler.schedules_dir.glob("*.md"))
-    assert len(files) == 1
-    content = files[0].read_text()
-    assert "name: KI News Analyse" in content
-    assert "schedule: täglich 09:00" in content
-    assert "Analysiere" in content
+    # DB should be called
+    mock_db.create_schedule.assert_called_once()
+    call_kwargs = mock_db.create_schedule.call_args[1]
+    assert call_kwargs["name"] == "KI News Analyse"
+    assert call_kwargs["schedule"] == "täglich 09:00"
+    assert call_kwargs["agent_type"] == "researcher"
+    assert "Analysiere" in call_kwargs["prompt"]
     # Scheduler reloaded
     mock_scheduler.reload_tasks.assert_called_once()
 
@@ -317,32 +315,26 @@ async def test_schedule_create(agent_with_scheduler, mock_llm, mock_telegram, mo
 async def test_schedule_create_empty(agent_with_scheduler, mock_telegram):
     await agent_with_scheduler.handle_message("/schedule create", chat_id="123")
     text = mock_telegram.send_message.call_args[0][0]
-    assert "Was soll der Schedule tun?" in text
+    assert "Bitte Beschreibung angeben" in text
 
 
 @pytest.mark.asyncio
-async def test_schedule_toggle(agent_with_scheduler, mock_telegram, mock_scheduler):
-    task = MagicMock()
-    task.name = "Heartbeat"
-    task.file_path = Path("/tmp/heartbeat.md")
-    mock_scheduler.tasks = {"heartbeat.md": task}
-    await agent_with_scheduler.handle_message("/schedule toggle heartbeat", chat_id="123")
+async def test_schedule_toggle(agent_with_scheduler, mock_telegram, mock_scheduler, mock_db):
+    mock_scheduler.tasks = [{"id": 1, "name": "Heartbeat", "schedule": "stündlich", "agent_type": "ops", "active": 1}]
+    mock_db.toggle_schedule = AsyncMock(return_value=True)
+    await agent_with_scheduler.handle_message("/schedule toggle Heartbeat", chat_id="123")
     text = mock_telegram.send_message.call_args[0][0]
     assert "aktiviert" in text or "pausiert" in text
 
 
 @pytest.mark.asyncio
-async def test_schedule_delete(agent_with_scheduler, mock_telegram, mock_scheduler, tmp_path):
-    fpath = tmp_path / "Schedules" / "test-task.md"
-    fpath.write_text("---\nname: Test\n---\nPrompt")
-    task = MagicMock()
-    task.name = "Test Task"
-    task.file_path = fpath
-    mock_scheduler.tasks = {"test-task.md": task}
-    await agent_with_scheduler.handle_message("/schedule delete test", chat_id="123")
+async def test_schedule_delete(agent_with_scheduler, mock_telegram, mock_scheduler, mock_db):
+    mock_scheduler.tasks = [{"id": 1, "name": "Test Task", "schedule": "täglich 09:00", "agent_type": "researcher", "active": 1}]
+    mock_db.delete_schedule = AsyncMock()
+    await agent_with_scheduler.handle_message("/schedule delete Test Task", chat_id="123")
     text = mock_telegram.send_message.call_args[0][0]
     assert "gelöscht" in text
-    assert not fpath.exists()
+    mock_db.delete_schedule.assert_called_once_with(1)
 
 
 @pytest.mark.asyncio
