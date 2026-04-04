@@ -149,8 +149,6 @@ async def lifespan(app: FastAPI):
         telegram_task = asyncio.create_task(telegram.poll_loop())
         print("Telegram bot active")
 
-    # NO ObsidianWatcher start
-
     print(f"Falki running on port {PORT}")
     yield
 
