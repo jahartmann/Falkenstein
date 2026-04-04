@@ -1,0 +1,148 @@
+import asyncio
+import json
+import re
+from backend.sub_agent import SubAgent
+from backend.obsidian_writer import ObsidianWriter
+from backend.models import TaskData, TaskStatus
+
+_CLASSIFY_SYSTEM = (
+    "Du bist ein Assistent-Router. Analysiere die Nachricht und entscheide:\n"
+    "1. quick_reply — Direkt beantwortbar (Fragen, Status, Smalltalk, kurze Infos)\n"
+    "2. task — Braucht Arbeit (Recherche, Code, Texte schreiben, System-Tasks)\n\n"
+    "Bei quick_reply: Beantworte die Frage direkt.\n"
+    "Bei task: Bestimme den passenden Agent-Typ und Ergebnis-Typ.\n\n"
+    "Agent-Typen: coder, researcher, writer, ops\n"
+    "Ergebnis-Typen: recherche, guide, cheat-sheet, code, report\n\n"
+    "Antworte NUR mit JSON:\n"
+    '- quick_reply: {"type": "quick_reply", "answer": "<deine Antwort>"}\n'
+    '- task: {"type": "task", "agent": "<typ>", "result_type": "<typ>", "title": "<kurzer Titel>"}'
+)
+
+
+class MainAgent:
+    def __init__(self, llm, tools, db, obsidian_writer: ObsidianWriter,
+                 telegram=None, ws_callback=None):
+        self.llm = llm
+        self.tools = tools
+        self.db = db
+        self.obsidian_writer = obsidian_writer
+        self.telegram = telegram
+        self.ws_callback = ws_callback
+        self.active_agents: dict[str, dict] = {}
+        self._chat_history: dict[str, list[dict]] = {}
+        self._max_history = 20
+
+    async def classify(self, message: str) -> dict:
+        response = await self.llm.chat(
+            system_prompt=_CLASSIFY_SYSTEM,
+            messages=[{"role": "user", "content": message}],
+            temperature=0.1,
+        )
+        try:
+            text = response.strip()
+            if "{" in text:
+                text = text[text.index("{"):text.rindex("}") + 1]
+            return json.loads(text)
+        except (json.JSONDecodeError, ValueError):
+            return {"type": "quick_reply", "answer": response}
+
+    async def handle_message(self, text: str, chat_id: str = ""):
+        classification = await self.classify(text)
+        msg_type = classification.get("type", "quick_reply")
+
+        if msg_type == "quick_reply":
+            answer = classification.get("answer", "Ich habe keine Antwort.")
+            if self.telegram:
+                await self.telegram.send_message(answer[:4000], chat_id=chat_id or None)
+        elif msg_type == "task":
+            await self._handle_task(classification, text, chat_id)
+
+    async def _handle_task(self, classification: dict, original_text: str, chat_id: str):
+        agent_type = classification.get("agent", "ops")
+        result_type = classification.get("result_type", "report")
+        title = classification.get("title", original_text[:80])
+
+        task = TaskData(title=title, description=original_text, status=TaskStatus.OPEN)
+        task_id = await self.db.create_task(task)
+
+        task_path = self.obsidian_writer.create_task_note(
+            title=title, typ=result_type, agent=agent_type,
+        )
+        self.obsidian_writer.kanban_move(title, "backlog")
+
+        if self.telegram:
+            await self.telegram.send_message(
+                f"👍 Arbeite daran: {title}\n🤖 Agent: {agent_type}",
+                chat_id=chat_id or None,
+            )
+
+        await self.db.update_task_status(task_id, TaskStatus.IN_PROGRESS, agent_type)
+        self.obsidian_writer.kanban_move(title, "in_progress")
+        self.obsidian_writer.update_task_status(task_path, "in_progress")
+
+        sub = SubAgent(
+            agent_type=agent_type,
+            task_description=original_text,
+            llm=self.llm,
+            tools=self.tools,
+            db=self.db,
+        )
+        self.active_agents[sub.agent_id] = {
+            "type": agent_type,
+            "task": title,
+            "task_id": task_id,
+            "sub_agent": sub,
+        }
+
+        if self.ws_callback:
+            await self.ws_callback({
+                "type": "agent_spawned",
+                "agent_id": sub.agent_id,
+                "agent_type": agent_type,
+                "task": title,
+            })
+
+        try:
+            result = await sub.run()
+
+            result_path = self.obsidian_writer.write_result(
+                title=title, typ=result_type, content=result,
+            )
+
+            await self.db.update_task_result(task_id, result[:5000])
+            await self.db.update_task_status(task_id, TaskStatus.DONE)
+            self.obsidian_writer.kanban_move(title, "done")
+            self.obsidian_writer.update_task_status(task_path, "done")
+
+            if self.telegram:
+                summary = result[:500] if len(result) <= 500 else result[:497] + "..."
+                await self.telegram.send_message(
+                    f"✅ Fertig: {title}\n\n{summary}\n\n📁 Ergebnis in Obsidian",
+                    chat_id=chat_id or None,
+                )
+
+            if self.ws_callback:
+                await self.ws_callback({
+                    "type": "agent_done",
+                    "agent_id": sub.agent_id,
+                    "agent_type": agent_type,
+                    "task": title,
+                })
+
+        except Exception as e:
+            await self.db.update_task_status(task_id, TaskStatus.FAILED)
+            if self.telegram:
+                await self.telegram.send_message(
+                    f"❌ Fehler bei: {title}\n{str(e)[:300]}",
+                    chat_id=chat_id or None,
+                )
+        finally:
+            self.active_agents.pop(sub.agent_id, None)
+
+    def get_status(self) -> dict:
+        return {
+            "active_agents": [
+                {"agent_id": aid, "type": info["type"], "task": info["task"]}
+                for aid, info in self.active_agents.items()
+            ],
+        }
