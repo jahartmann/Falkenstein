@@ -28,9 +28,9 @@ def _extract_project(file_path: Path) -> str | None:
 class ObsidianWatcher:
     """Monitors Obsidian vault markdown files for new unchecked todo items."""
 
-    def __init__(self, vault_path: Path, router, debounce_seconds: float = 2.0):
+    def __init__(self, vault_path: Path, on_new_todo=None, debounce_seconds: float = 2.0):
         self.vault = vault_path.resolve()
-        self.router = router
+        self._on_new_todo = on_new_todo
         self.debounce_seconds = debounce_seconds
 
         # Maps file path -> set of known todo line hashes
@@ -53,11 +53,11 @@ class ObsidianWatcher:
         """Return list of all markdown files we actively watch."""
         files: list[Path] = []
 
-        inbox = self.vault / "Management" / "Inbox.md"
+        inbox = self.vault / "KI-Büro" / "Management" / "Inbox.md"
         if inbox.exists():
             files.append(inbox)
 
-        projekte_root = self.vault / "Falkenstein" / "Projekte"
+        projekte_root = self.vault / "KI-Büro" / "Falkenstein" / "Projekte"
         if projekte_root.exists():
             for tasks_file in sorted(projekte_root.glob("*/Tasks.md")):
                 files.append(tasks_file)
@@ -112,8 +112,8 @@ class ObsidianWatcher:
         handler = _VaultEventHandler(self)
         self._observer = Observer()
 
-        mgmt_dir = self.vault / "Management"
-        projekte_dir = self.vault / "Falkenstein" / "Projekte"
+        mgmt_dir = self.vault / "KI-Büro" / "Management"
+        projekte_dir = self.vault / "KI-Büro" / "Falkenstein" / "Projekte"
 
         if mgmt_dir.exists():
             self._observer.schedule(handler, str(mgmt_dir), recursive=False)
@@ -188,7 +188,8 @@ class ObsidianWatcher:
             await asyncio.sleep(self.debounce_seconds)
             changes = self.detect_changes()
             for change in changes:
-                await self.router.route_event("todo_from_obsidian", change)
+                if self._on_new_todo:
+                    await self._on_new_todo(change["content"], change["source_file"])
         except asyncio.CancelledError:
             pass
 
