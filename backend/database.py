@@ -129,6 +129,56 @@ class Database:
                 content    TEXT NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
+
+            CREATE TABLE IF NOT EXISTS memories (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                layer       TEXT NOT NULL,
+                category    TEXT NOT NULL,
+                key         TEXT NOT NULL,
+                value       TEXT NOT NULL,
+                confidence  REAL DEFAULT 0.8,
+                source      TEXT DEFAULT '',
+                created_at  TEXT DEFAULT (datetime('now')),
+                updated_at  TEXT DEFAULT (datetime('now')),
+                expires_at  TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS activity_log (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id     TEXT NOT NULL,
+                timestamp   TEXT NOT NULL DEFAULT (datetime('now')),
+                day_type    TEXT DEFAULT 'weekday'
+            );
+
+            CREATE TABLE IF NOT EXISTS reminders (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id     TEXT NOT NULL,
+                text        TEXT NOT NULL,
+                due_at      TEXT NOT NULL,
+                delivered   INTEGER DEFAULT 0,
+                follow_up   INTEGER DEFAULT 0,
+                created_at  TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS planned_tasks (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                name        TEXT NOT NULL,
+                chat_id     TEXT NOT NULL,
+                status      TEXT DEFAULT 'pending',
+                created_at  TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS task_steps (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                planned_task_id INTEGER REFERENCES planned_tasks(id),
+                step_order      INTEGER NOT NULL,
+                agent_prompt    TEXT NOT NULL,
+                scheduled_at    TEXT,
+                depends_on_step INTEGER,
+                status          TEXT DEFAULT 'pending',
+                result          TEXT,
+                completed_at    TEXT
+            );
         """)
         await self._conn.commit()
 

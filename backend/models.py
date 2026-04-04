@@ -74,3 +74,55 @@ class MessageData(BaseModel):
     project: str | None = None
     type: MessageType
     content: str
+
+
+class Memory(BaseModel):
+    id: int | None = None
+    layer: str          # 'user', 'self', 'relationship'
+    category: str       # e.g. 'preferences', 'experiences', 'dynamics'
+    key: str
+    value: str
+    confidence: float = 0.8
+    source: str = ""
+    created_at: str | None = None
+    updated_at: str | None = None
+    expires_at: str | None = None
+
+
+class Reminder(BaseModel):
+    id: int | None = None
+    chat_id: str
+    text: str
+    due_at: str
+    delivered: bool = False
+    follow_up: bool = False
+    created_at: str | None = None
+
+
+class PlannedTask(BaseModel):
+    id: int | None = None
+    name: str
+    chat_id: str
+    status: str = "pending"
+    steps: list["TaskStep"] = []
+
+
+class TaskStep(BaseModel):
+    id: int | None = None
+    planned_task_id: int | None = None
+    step_order: int = 0
+    agent_prompt: str = ""
+    scheduled_at: str | None = None
+    depends_on_step: int | None = None
+    status: str = "pending"
+    result: str | None = None
+    completed_at: str | None = None
+
+
+class DailyProfile(BaseModel):
+    wake_up: str = "07:30"
+    peak_hours: str = "10:00-13:00"
+    lunch_break: str = "13:00-14:00"
+    evening_active: str = "20:00-23:30"
+    sleep: str = "00:00"
+    weekend_shift_hours: float = 1.5
