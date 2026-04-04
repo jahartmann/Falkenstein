@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     # Obsidian
     obsidian_watch_enabled: bool = True
     obsidian_auto_submit_tasks: bool = True
+    # Brave Search API
+    brave_api_key: str = ""
 
     @property
     def model_light(self) -> str:
