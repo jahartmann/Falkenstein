@@ -94,6 +94,28 @@ class Database:
                 mood       TEXT NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
+
+            CREATE TABLE IF NOT EXISTS schedules (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                name          TEXT NOT NULL UNIQUE,
+                schedule      TEXT NOT NULL,
+                agent_type    TEXT DEFAULT 'researcher',
+                prompt        TEXT NOT NULL,
+                active        INTEGER DEFAULT 1,
+                active_hours  TEXT,
+                light_context INTEGER DEFAULT 0,
+                last_run      TEXT,
+                created_at    TEXT DEFAULT (datetime('now')),
+                updated_at    TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS config (
+                key         TEXT PRIMARY KEY,
+                value       TEXT NOT NULL,
+                category    TEXT NOT NULL DEFAULT 'general',
+                description TEXT,
+                updated_at  TEXT DEFAULT (datetime('now'))
+            );
         """)
         await self._conn.commit()
 
@@ -327,3 +349,126 @@ class Database:
             ),
         )
         await self._conn.commit()
+
+    # ------------------------------------------------------------------
+    # Schedules
+    # ------------------------------------------------------------------
+
+    async def create_schedule(
+        self,
+        name: str,
+        schedule: str,
+        agent_type: str,
+        prompt: str,
+        active: int = 1,
+        active_hours: str | None = None,
+        light_context: int = 0,
+    ) -> int:
+        cursor = await self._conn.execute(
+            """
+            INSERT INTO schedules (name, schedule, agent_type, prompt, active, active_hours, light_context)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (name, schedule, agent_type, prompt, active, active_hours, light_context),
+        )
+        await self._conn.commit()
+        return cursor.lastrowid
+
+    async def get_schedule(self, schedule_id: int) -> dict | None:
+        cursor = await self._conn.execute(
+            "SELECT * FROM schedules WHERE id = ?", (schedule_id,)
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+    async def get_all_schedules(self) -> list[dict]:
+        cursor = await self._conn.execute("SELECT * FROM schedules ORDER BY id")
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+    async def get_active_schedules(self) -> list[dict]:
+        cursor = await self._conn.execute(
+            "SELECT * FROM schedules WHERE active = 1 ORDER BY id"
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+    _SCHEDULE_FIELDS = {"name", "schedule", "agent_type", "prompt", "active", "active_hours", "light_context"}
+
+    async def update_schedule(self, schedule_id: int, **kwargs) -> None:
+        fields = {k: v for k, v in kwargs.items() if k in self._SCHEDULE_FIELDS}
+        if not fields:
+            return
+        sets = ", ".join(f"{k} = ?" for k in fields)
+        values = list(fields.values())
+        values.append(schedule_id)
+        await self._conn.execute(
+            f"UPDATE schedules SET {sets}, updated_at = datetime('now') WHERE id = ?",
+            values,
+        )
+        await self._conn.commit()
+
+    async def delete_schedule(self, schedule_id: int) -> None:
+        await self._conn.execute("DELETE FROM schedules WHERE id = ?", (schedule_id,))
+        await self._conn.commit()
+
+    async def toggle_schedule(self, schedule_id: int) -> bool:
+        """Toggle active flag, return new state."""
+        await self._conn.execute(
+            "UPDATE schedules SET active = 1 - active, updated_at = datetime('now') WHERE id = ?",
+            (schedule_id,),
+        )
+        await self._conn.commit()
+        s = await self.get_schedule(schedule_id)
+        return bool(s["active"])
+
+    async def mark_schedule_run(self, schedule_id: int) -> None:
+        await self._conn.execute(
+            "UPDATE schedules SET last_run = datetime('now'), updated_at = datetime('now') WHERE id = ?",
+            (schedule_id,),
+        )
+        await self._conn.commit()
+
+    # ------------------------------------------------------------------
+    # Config
+    # ------------------------------------------------------------------
+
+    async def set_config(
+        self,
+        key: str,
+        value: str,
+        category: str = "general",
+        description: str | None = None,
+    ) -> None:
+        await self._conn.execute(
+            """
+            INSERT INTO config (key, value, category, description, updated_at)
+            VALUES (?, ?, ?, ?, datetime('now'))
+            ON CONFLICT(key) DO UPDATE SET
+                value       = excluded.value,
+                category    = excluded.category,
+                description = excluded.description,
+                updated_at  = datetime('now')
+            """,
+            (key, value, category, description),
+        )
+        await self._conn.commit()
+
+    async def get_config(self, key: str, default: str | None = None) -> str | None:
+        cursor = await self._conn.execute(
+            "SELECT value FROM config WHERE key = ?", (key,)
+        )
+        row = await cursor.fetchone()
+        return row["value"] if row else default
+
+    async def get_config_by_category(self, category: str) -> list[dict]:
+        cursor = await self._conn.execute(
+            "SELECT * FROM config WHERE category = ? ORDER BY key", (category,)
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+    async def get_all_config(self) -> list[dict]:
+        cursor = await self._conn.execute("SELECT * FROM config ORDER BY key")
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
