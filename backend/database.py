@@ -129,6 +129,16 @@ class Database:
         """)
         await self._conn.commit()
 
+        # FTS5 virtual table for episodic memory (separate from executescript)
+        try:
+            await self._conn.execute(
+                "CREATE VIRTUAL TABLE IF NOT EXISTS task_fts USING fts5("
+                "title, description, result, content=tasks, content_rowid=id)"
+            )
+            await self._conn.commit()
+        except Exception:
+            pass  # FTS5 not available or already exists
+
         # Migrate existing tables — add columns if missing
         await self._migrate()
 
@@ -295,12 +305,54 @@ class Database:
         rows = await cursor.fetchall()
         return [self._row_to_task(r) for r in rows]
 
+    async def rebuild_task_fts(self) -> None:
+        """Rebuild FTS index from tasks table."""
+        try:
+            await self._conn.execute("INSERT INTO task_fts(task_fts) VALUES('rebuild')")
+            await self._conn.commit()
+        except Exception:
+            pass  # FTS table may not exist yet on first run
+
+    async def search_past_tasks(self, query: str, limit: int = 3) -> list[dict]:
+        """Full-text search on completed tasks for episodic memory."""
+        try:
+            # Escape FTS5 special characters
+            safe_query = query.replace('"', '').replace("'", "")
+            if not safe_query.strip():
+                return []
+            # Use phrase matching with * for prefix search
+            terms = safe_query.split()[:5]  # Max 5 search terms
+            fts_query = " OR ".join(f'"{t}"' for t in terms if len(t) > 2)
+            if not fts_query:
+                return []
+            async with self._conn.execute(
+                "SELECT t.id, t.title, t.result FROM tasks t "
+                "JOIN task_fts f ON t.id = f.rowid "
+                "WHERE task_fts MATCH ? AND t.status = 'done' "
+                "ORDER BY rank LIMIT ?",
+                (fts_query, limit),
+            ) as cur:
+                rows = await cur.fetchall()
+            return [{"id": r["id"], "title": r["title"], "result": (r["result"] or "")[:500]} for r in rows]
+        except Exception:
+            return []  # FTS not ready or query error
+
     async def update_task_result(self, task_id: int, result: str):
         await self._conn.execute(
             "UPDATE tasks SET result = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
             (result, task_id),
         )
         await self._conn.commit()
+        # Sync FTS index
+        try:
+            await self._conn.execute(
+                "INSERT OR REPLACE INTO task_fts(rowid, title, description, result) "
+                "SELECT id, title, description, result FROM tasks WHERE id = ?",
+                (task_id,),
+            )
+            await self._conn.commit()
+        except Exception:
+            pass  # FTS sync failure is non-critical
 
     async def all_subtasks_done(self, parent_id: int) -> bool:
         cursor = await self._conn.execute(

@@ -111,6 +111,16 @@ class MainAgent:
                     parts.append(fact_block)
             except Exception:
                 pass
+        # Episodic memory: similar past tasks
+        try:
+            past = await self.db.search_past_tasks(message, limit=3)
+            if past:
+                past_block = "## Ähnliche vergangene Aufgaben\n"
+                for p in past:
+                    past_block += f"- #{p['id']} {p['title']}: {p['result'][:200]}\n"
+                parts.append(past_block)
+        except Exception:
+            pass
         parts.append(_CLASSIFY_SYSTEM)
         parts.append(f"\n## Aktueller System-Status\n{context}")
         system = "\n\n".join(parts)
