@@ -1,8 +1,6 @@
 import asyncio
 import datetime
-import json
 import re
-from pathlib import Path
 
 _WEEKDAY_MAP = {
     "montags": 0, "dienstags": 1, "mittwochs": 2, "donnerstags": 3,
@@ -119,28 +117,6 @@ def next_run(schedule: dict, after: datetime.datetime) -> datetime.datetime:
     return after + datetime.timedelta(hours=1)
 
 
-def _parse_frontmatter(text: str) -> tuple[dict, str]:
-    """Parse YAML frontmatter from markdown text. Returns (metadata, body)."""
-    if not text.startswith("---"):
-        return {}, text
-    parts = text.split("---", 2)
-    if len(parts) < 3:
-        return {}, text
-    meta = {}
-    for line in parts[1].strip().splitlines():
-        if ":" in line:
-            key, val = line.split(":", 1)
-            key = key.strip()
-            val = val.strip()
-            # Type coercion
-            if val.lower() in ("true", "false"):
-                val = val.lower() == "true"
-            elif val.isdigit():
-                val = int(val)
-            meta[key] = val
-    return meta, parts[2].strip()
-
-
 def _parse_active_hours(s) -> tuple[int, int, int, int] | None:
     """Parse 'HH:MM-HH:MM' into (start_h, start_m, end_h, end_m)."""
     if not s or not isinstance(s, str):
@@ -151,241 +127,126 @@ def _parse_active_hours(s) -> tuple[int, int, int, int] | None:
     return None
 
 
-def _save_last_runs(path: Path, runs: dict[str, str]):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(runs, indent=2), encoding="utf-8")
-
-
-def _load_last_runs(path: Path) -> dict[str, str]:
-    if not path.exists():
-        return {}
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return {}
-
-
-class ScheduledTask:
-    """A single scheduled task loaded from an Obsidian markdown file."""
-
-    def __init__(self, name: str, schedule_str: str, agent: str, active: bool,
-                 prompt: str, file_path: Path, active_hours=None, light_context: bool = False):
-        self.name = name
-        self.schedule_str = schedule_str
-        self.agent = agent
-        self.active = active
-        self.prompt = prompt
-        self.file_path = file_path
-        self.active_hours = active_hours
-        self.light_context = light_context
-        self.last_run: datetime.datetime | None = None
-        self._parsed = parse_schedule(schedule_str)
-        self._next_run: datetime.datetime | None = None
-
-    @classmethod
-    def from_file(cls, path: Path) -> "ScheduledTask":
-        text = path.read_text(encoding="utf-8")
-        meta, body = _parse_frontmatter(text)
-        return cls(
-            name=meta.get("name", path.stem),
-            schedule_str=meta.get("schedule", "stündlich"),
-            agent=meta.get("agent", "researcher"),
-            active=meta.get("active", True),
-            prompt=body,
-            file_path=path,
-            active_hours=_parse_active_hours(meta.get("active_hours")),
-            light_context=meta.get("light_context", False),
-        )
-
-    def compute_next_run(self, after: datetime.datetime | None = None):
-        ref = after or self.last_run or datetime.datetime.now()
-        self._next_run = next_run(self._parsed, ref)
-
-    def is_in_active_hours(self, now: datetime.datetime) -> bool:
-        if self.active_hours is None:
-            return True
-        sh, sm, eh, em = self.active_hours
-        start = now.replace(hour=sh, minute=sm, second=0)
-        end = now.replace(hour=eh, minute=em, second=0)
-        return start <= now <= end
+def _is_in_active_hours(active_hours, now: datetime.datetime) -> bool:
+    """Check if *now* falls within the active_hours window."""
+    if active_hours is None:
+        return True
+    sh, sm, eh, em = active_hours
+    start = now.replace(hour=sh, minute=sm, second=0, microsecond=0)
+    end = now.replace(hour=eh, minute=em, second=0, microsecond=0)
+    return start <= now <= end
 
 
 class Scheduler:
-    """Loads scheduled tasks from Obsidian and runs them on time."""
+    """Reads schedules from SQLite and dispatches due tasks."""
 
-    def __init__(self, vault_path: Path):
-        self.vault = vault_path.resolve()
-        self.schedules_dir = self.vault / "KI-Büro" / "Schedules"
-        self._last_run_path = self.schedules_dir / ".last_run.json"
-        self.tasks: dict[str, ScheduledTask] = {}
-        self._on_task_due = None  # async callback: (ScheduledTask) -> None
+    def __init__(self, db):
+        self._db = db
+        self.tasks: list[dict] = []
         self._running = False
+        self._task: asyncio.Task | None = None
+        self._on_task_due = None
 
-    def load_tasks(self):
-        """Load all .md files from Schedules directory."""
-        self.tasks.clear()
-        if not self.schedules_dir.exists():
-            self.schedules_dir.mkdir(parents=True, exist_ok=True)
-        self._create_default_heartbeat()
-        self._create_schedule_template()
-        last_runs = _load_last_runs(self._last_run_path)
-        for path in sorted(self.schedules_dir.glob("*.md")):
-            if path.name.startswith("_"):
-                continue  # skip templates
-            try:
-                task = ScheduledTask.from_file(path)
-                lr = last_runs.get(path.name)
-                if lr:
-                    task.last_run = datetime.datetime.fromisoformat(lr)
-                task.compute_next_run()
-                self.tasks[path.name] = task
-            except Exception as e:
-                print(f"Scheduler: error loading {path.name}: {e}")
+    # ── loading ─────────────────────────────────────────────────
 
-    def reload_tasks(self):
-        """Reload tasks from disk (called when files change)."""
-        self.load_tasks()
+    async def load_tasks(self) -> None:
+        """Load all schedules from DB, compute next_run for each."""
+        rows = await self._db.get_all_schedules()
+        self.tasks = []
+        for row in rows:
+            parsed = parse_schedule(row["schedule"])
+            last_run = (
+                datetime.datetime.fromisoformat(row["last_run"])
+                if row.get("last_run")
+                else None
+            )
+            active_hours = _parse_active_hours(row.get("active_hours"))
+            nr = (
+                next_run(parsed, last_run or datetime.datetime.now())
+                if row["active"]
+                else None
+            )
+            task = {
+                **row,
+                "_parsed": parsed,
+                "_last_run": last_run,
+                "_active_hours": active_hours,
+                "_next_run": nr,
+            }
+            self.tasks.append(task)
 
-    def get_due_tasks(self, now: datetime.datetime | None = None) -> list[ScheduledTask]:
-        """Return list of tasks that are due for execution."""
+    async def reload_tasks(self) -> None:
+        await self.load_tasks()
+
+    # ── due check ───────────────────────────────────────────────
+
+    def get_due_tasks(self, now: datetime.datetime | None = None) -> list[dict]:
+        """Return tasks that are due now."""
         now = now or datetime.datetime.now()
         due = []
-        for task in self.tasks.values():
-            if not task.active:
+        for task in self.tasks:
+            if not task.get("active"):
                 continue
-            if not task.is_in_active_hours(now):
+            if not _is_in_active_hours(task.get("_active_hours"), now):
                 continue
-            if task._next_run and task._next_run <= now:
+            if task["_next_run"] is not None and task["_next_run"] <= now:
                 due.append(task)
         return due
 
-    def mark_run(self, task: ScheduledTask):
-        """Mark a task as just executed. Updates last_run and persists."""
-        now = datetime.datetime.now()
-        task.last_run = now
-        task.compute_next_run(after=now)
-        # Persist
-        last_runs = _load_last_runs(self._last_run_path)
-        last_runs[task.file_path.name] = now.isoformat()
-        _save_last_runs(self._last_run_path, last_runs)
+    # ── mark run ────────────────────────────────────────────────
 
-    async def start(self, on_task_due):
-        """Start the scheduler tick loop. on_task_due is an async callback."""
+    async def mark_run(self, task: dict) -> None:
+        """Update last_run in DB and in-memory."""
+        now = datetime.datetime.now()
+        await self._db.mark_schedule_run(task["id"])
+        # Update in-memory state
+        task["_last_run"] = now
+        task["_next_run"] = next_run(task["_parsed"], now)
+
+    # ── lifecycle ───────────────────────────────────────────────
+
+    async def start(self, on_task_due) -> None:
+        """Start tick loop."""
         self._on_task_due = on_task_due
         self._running = True
-        self.load_tasks()
+        await self.load_tasks()
+        self._task = asyncio.create_task(self._tick_loop())
 
-        # Check for missed tasks on startup
-        now = datetime.datetime.now()
-        for task in self.tasks.values():
-            if not task.active:
-                continue
-            if task._next_run and task._next_run <= now and task.is_in_active_hours(now):
-                print(f"Scheduler: recovering missed task '{task.name}'")
-                self.mark_run(task)
-                if self._on_task_due:
-                    await self._on_task_due(task)
-
-        # Tick loop
-        try:
-            while self._running:
-                await asyncio.sleep(60)
+    async def _tick_loop(self) -> None:
+        """Every 60s, check for due tasks, dispatch via create_task."""
+        while self._running:
+            try:
                 due = self.get_due_tasks()
                 for task in due:
-                    print(f"Scheduler: triggering '{task.name}'")
-                    self.mark_run(task)
+                    await self.mark_run(task)
                     if self._on_task_due:
-                        try:
-                            await asyncio.wait_for(self._on_task_due(task), timeout=300)
-                        except asyncio.TimeoutError:
-                            print(f"Scheduler: task '{task.name}' timed out after 5 min")
-                        except Exception as e:
-                            print(f"Scheduler: task '{task.name}' error: {e}")
-        except asyncio.CancelledError:
-            self._running = False
+                        asyncio.create_task(self._on_task_due(task))
+            except Exception as e:
+                print(f"Scheduler error: {e}")
+            await asyncio.sleep(60)
 
-    async def stop(self):
+    async def stop(self) -> None:
         self._running = False
+        if self._task:
+            self._task.cancel()
+
+    # ── info ────────────────────────────────────────────────────
 
     def get_all_tasks_info(self) -> list[dict]:
-        """Return task info for admin API."""
-        now = datetime.datetime.now()
+        """Return serializable list for API."""
         result = []
-        for filename, task in self.tasks.items():
+        for task in self.tasks:
+            ah = task.get("_active_hours")
             result.append({
-                "filename": filename,
-                "name": task.name,
-                "schedule": task.schedule_str,
-                "agent": task.agent,
-                "active": task.active,
-                "last_run": task.last_run.isoformat() if task.last_run else None,
-                "next_run": task._next_run.isoformat() if task._next_run else None,
-                "active_hours": f"{task.active_hours[0]:02d}:{task.active_hours[1]:02d}-{task.active_hours[2]:02d}:{task.active_hours[3]:02d}" if task.active_hours else None,
+                "id": task["id"],
+                "name": task["name"],
+                "schedule": task["schedule"],
+                "agent_type": task.get("agent_type", "researcher"),
+                "active": bool(task.get("active")),
+                "last_run": task["_last_run"].isoformat() if task.get("_last_run") else None,
+                "next_run": task["_next_run"].isoformat() if task.get("_next_run") else None,
+                "active_hours": (
+                    f"{ah[0]:02d}:{ah[1]:02d}-{ah[2]:02d}:{ah[3]:02d}" if ah else None
+                ),
             })
         return result
-
-    def toggle_task(self, filename: str) -> bool:
-        """Toggle active state of a task. Writes to file. Returns new state."""
-        task = self.tasks.get(filename)
-        if not task:
-            return False
-        new_state = not task.active
-        task.active = new_state
-        # Update frontmatter in file
-        if task.file_path.exists():
-            content = task.file_path.read_text(encoding="utf-8")
-            old = "active: true" if not new_state else "active: false"
-            new = "active: true" if new_state else "active: false"
-            content = content.replace(old, new, 1)
-            task.file_path.write_text(content, encoding="utf-8")
-        return new_state
-
-    def _create_default_heartbeat(self):
-        """Create default heartbeat.md if Schedules dir is empty."""
-        hb = self.schedules_dir / "heartbeat.md"
-        if hb.exists():
-            return
-        hb.write_text(
-            "---\n"
-            "name: Heartbeat\n"
-            "schedule: alle 30 Minuten\n"
-            "agent: ops\n"
-            "active: true\n"
-            "active_hours: 08:00-22:00\n"
-            "light_context: true\n"
-            "---\n\n"
-            "# System Heartbeat\n\n"
-            "Prüfe den Systemstatus:\n"
-            "- Ist Ollama erreichbar?\n"
-            "- Gibt es neue Einträge in der Obsidian Inbox?\n"
-            "- Gibt es fehlgeschlagene Tasks?\n"
-            "- Wie ist der CLI-Budget-Stand?\n\n"
-            "Wenn alles in Ordnung ist, antworte NUR mit: HEARTBEAT_OK\n"
-            "Wenn es Probleme oder wichtige Updates gibt, erstelle einen kurzen Statusbericht.\n",
-            encoding="utf-8",
-        )
-
-    def _create_schedule_template(self):
-        """Create _vorlage.md template if it doesn't exist."""
-        tpl = self.schedules_dir / "_vorlage.md"
-        if tpl.exists():
-            return
-        tpl.write_text(
-            "---\n"
-            "name: Name des Jobs\n"
-            "schedule: täglich 09:00\n"
-            "agent: researcher\n"
-            "active: true\n"
-            "active_hours: 08:00-22:00\n"
-            "light_context: false\n"
-            "---\n\n"
-            "<!-- Schedule-Formate:\n"
-            "  täglich HH:MM | stündlich | alle N Minuten | alle N Stunden\n"
-            "  Mo-Fr HH:MM | montags HH:MM ... sonntags HH:MM\n"
-            "  wöchentlich TAG HH:MM | cron: EXPR\n"
-            "\n"
-            "  Agent-Typen: coder | researcher | writer | ops\n"
-            "-->\n\n"
-            "Dein Prompt hier. Was soll der Agent tun?\n",
-            encoding="utf-8",
-        )

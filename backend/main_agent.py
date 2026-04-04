@@ -5,7 +5,28 @@ from pathlib import Path
 from backend.sub_agent import SubAgent
 from backend.obsidian_writer import ObsidianWriter
 from backend.models import TaskData, TaskStatus
-from backend.scheduler import ScheduledTask, Scheduler, _parse_frontmatter
+from backend.scheduler import Scheduler
+
+
+def _parse_frontmatter(text: str) -> tuple[dict, str]:
+    """Parse YAML frontmatter from markdown text. Returns (metadata, body)."""
+    if not text.startswith("---"):
+        return {}, text
+    parts = text.split("---", 2)
+    if len(parts) < 3:
+        return {}, text
+    meta = {}
+    for line in parts[1].strip().splitlines():
+        if ":" in line:
+            key, val = line.split(":", 1)
+            key = key.strip()
+            val = val.strip()
+            if val.lower() in ("true", "false"):
+                val = val.lower() == "true"
+            elif val.isdigit():
+                val = int(val)
+            meta[key] = val
+    return meta, parts[2].strip()
 from backend.memory.fact_memory import FactMemory, extract_and_store_facts
 from backend.llm_router import LLMRouter
 
@@ -757,11 +778,12 @@ class MainAgent:
             if self.telegram:
                 await self.telegram.send_message(error_msg[:4000], chat_id=chat_id or None)
 
-    async def handle_scheduled(self, task: ScheduledTask):
+    async def handle_scheduled(self, task: dict):
         """Run a scheduled task through a SubAgent. Suppress Telegram/Obsidian for HEARTBEAT_OK."""
+        task_name = task.get("name", "unknown")
         sub = SubAgent(
-            agent_type=task.agent,
-            task_description=task.prompt,
+            agent_type=task.get("agent_type", "researcher"),
+            task_description=task.get("prompt", ""),
             llm=self._get_llm_for("scheduled"),
             tools=self.tools,
             db=self.db,
@@ -771,7 +793,7 @@ class MainAgent:
         except Exception as e:
             if self.telegram:
                 await self.telegram.send_message(
-                    f"❌ Scheduled Task Fehler: {task.name}\n{str(e)[:300]}"
+                    f"❌ Scheduled Task Fehler: {task_name}\n{str(e)[:300]}"
                 )
             return
 
@@ -781,7 +803,7 @@ class MainAgent:
 
         # Write result to Obsidian
         self.obsidian_writer.write_result(
-            title=task.name,
+            title=task_name,
             typ="report",
             content=result,
         )
@@ -790,7 +812,7 @@ class MainAgent:
         if self.telegram:
             summary = result[:500] if len(result) <= 500 else result[:497] + "..."
             await self.telegram.send_message(
-                f"🕐 Scheduled: {task.name}\n\n{summary}"
+                f"🕐 Scheduled: {task_name}\n\n{summary}"
             )
 
     def get_status(self) -> dict:

@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from backend.main_agent import MainAgent
-from backend.scheduler import ScheduledTask, Scheduler
+from backend.scheduler import Scheduler
 
 
 @pytest.fixture
@@ -199,16 +199,16 @@ async def test_unknown_cmd_falls_through_to_llm(agent, mock_llm, mock_telegram):
     mock_llm.chat.assert_called_once()
 
 
-def _make_scheduled_task(name="Heartbeat", schedule="stündlich", agent="ops",
-                         prompt="Prüfe den Status.") -> ScheduledTask:
-    return ScheduledTask(
-        name=name,
-        schedule_str=schedule,
-        agent=agent,
-        active=True,
-        prompt=prompt,
-        file_path=Path("/tmp/test_schedule.md"),
-    )
+def _make_scheduled_task(name="Heartbeat", schedule="stündlich", agent_type="ops",
+                         prompt="Prüfe den Status.") -> dict:
+    return {
+        "id": 1,
+        "name": name,
+        "schedule": schedule,
+        "agent_type": agent_type,
+        "active": 1,
+        "prompt": prompt,
+    }
 
 
 @pytest.mark.asyncio
