@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Gamifiziertes KI-Büro: 2D-Pixelart-Simulation, 7 Agenten (WORK/IDLE-Mode). Ollama für 95%, Premium-CLIs für Komplexes.
+Smart Assistant: 1 MainAgent + SubAgents on demand. Telegram = Steuerung, Obsidian = Wissensbasis, Büro-UI = passiver Monitor.
 
 ## Commands
 ```bash
@@ -8,21 +8,26 @@ source venv/bin/activate && pip install -r requirements.txt  # setup
 python -m backend.main                                        # server :8080
 python -m pytest tests/ -v                                    # tests
 ```
-Requires: Python 3.11+, Ollama running, `ollama pull llama3`
+Requires: Python 3.11+, Ollama running, `ollama pull gemma4:26b`
 
 ## Stack
-Frontend: Phaser.js 3.80 + Tiled (48px) | Backend: FastAPI + WebSockets + aiosqlite | LLM: Ollama | DB: SQLite | Config: pydantic-settings `.env`
+Frontend: Phaser.js 3.80 + Tiled (48px) passive dashboard | Backend: FastAPI + WebSockets + aiosqlite | LLM: Ollama (Gemma 4) | Premium: Gemini/Claude CLI | DB: SQLite | Config: pydantic-settings `.env`
+
+## Architecture
+- MainAgent (`main_agent.py`): Klassifiziert Input, antwortet direkt oder spawnt SubAgent
+- SubAgents (`sub_agent.py`): Kurzlebig, fokussiertes Tool-Set (coder/researcher/writer/ops)
+- ObsidianWriter (`obsidian_writer.py`): Kanban, Task-Notes, Ergebnis-Routing
+- Telegram: Thin transport, alles durch MainAgent
+- Frontend: Zeigt nur aktive Agents, kein Sim-Loop
 
 ## Konventionen
-- IDs: `pm`, `team_lead`, `coder_1`, `coder_2`, `researcher`, `writer`, `ops`
-- States: `idle_wander/talk/coffee/phone/sit`, `work_sit/type/tool/review`
+- SubAgent-Typen: `coder`, `researcher`, `writer`, `ops`
+- Ergebnis-Ordner: `Recherchen`, `Guides`, `Cheat-Sheets`, `Code`, `Reports`
 - Pfade via `.env`, keine hardcodierten Pfade
-- Relationships: alphabetisch sortierte composite PK
 - Sprache: Doku/Kommunikation Deutsch, Code-Kommentare Englisch
-- DB-Tabellen: `agents`, `tasks`, `messages`, `relationships`, `tool_log`, `personality_log`
+- DB-Tabellen: `agents`, `tasks`, `messages`, `tool_log`
 
 ## Token-Effizienz
 - Subagenten mit `model: "sonnet"` oder `model: "haiku"` starten wenn Opus aktiv
 - Explore-Agents immer mit `model: "sonnet"`
 - Antworten kurz und direkt, kein Filler
-- Architektur-Details nicht in CLAUDE.md — Code lesen statt hier dokumentieren
