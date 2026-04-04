@@ -1,9 +1,11 @@
 import asyncio
 import json
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from backend.main_agent import MainAgent
+from backend.scheduler import ScheduledTask
 
 
 @pytest.fixture
@@ -110,3 +112,48 @@ def test_get_status(agent):
     status = agent.get_status()
     assert "active_agents" in status
     assert isinstance(status["active_agents"], list)
+
+
+def _make_scheduled_task(name="Heartbeat", schedule="stündlich", agent="ops",
+                         prompt="Prüfe den Status.") -> ScheduledTask:
+    return ScheduledTask(
+        name=name,
+        schedule_str=schedule,
+        agent=agent,
+        active=True,
+        prompt=prompt,
+        file_path=Path("/tmp/test_schedule.md"),
+    )
+
+
+@pytest.mark.asyncio
+async def test_handle_scheduled_heartbeat_ok(agent, mock_telegram):
+    """HEARTBEAT_OK result suppresses Telegram and Obsidian write."""
+    task = _make_scheduled_task()
+    with patch("backend.main_agent.SubAgent") as MockSub:
+        mock_sub = AsyncMock()
+        mock_sub.run = AsyncMock(return_value="HEARTBEAT_OK")
+        mock_sub.agent_id = "sub_ops_hb"
+        MockSub.return_value = mock_sub
+        await agent.handle_scheduled(task)
+    mock_telegram.send_message.assert_not_called()
+    agent.obsidian_writer.write_result.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_handle_scheduled_with_report(agent, mock_telegram, mock_obsidian_writer):
+    """Normal result writes to Obsidian and sends Telegram summary."""
+    task = _make_scheduled_task(name="Daily Check", prompt="Prüfe alle offenen Tasks.")
+    with patch("backend.main_agent.SubAgent") as MockSub:
+        mock_sub = AsyncMock()
+        mock_sub.run = AsyncMock(return_value="Systemstatus: Alles OK. 3 Tasks offen.")
+        mock_sub.agent_id = "sub_ops_daily"
+        MockSub.return_value = mock_sub
+        await agent.handle_scheduled(task)
+    mock_obsidian_writer.write_result.assert_called_once()
+    call_kwargs = mock_obsidian_writer.write_result.call_args
+    assert call_kwargs[1]["title"] == "Daily Check" or call_kwargs[0][0] == "Daily Check"
+    mock_telegram.send_message.assert_called_once()
+    sent_text = mock_telegram.send_message.call_args[0][0]
+    assert "Daily Check" in sent_text
+    assert "Systemstatus" in sent_text

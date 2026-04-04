@@ -4,6 +4,7 @@ import re
 from backend.sub_agent import SubAgent
 from backend.obsidian_writer import ObsidianWriter
 from backend.models import TaskData, TaskStatus
+from backend.scheduler import ScheduledTask
 
 _CLASSIFY_SYSTEM = (
     "Du bist ein Assistent-Router. Analysiere die Nachricht und entscheide:\n"
@@ -213,6 +214,42 @@ class MainAgent:
                 )
         finally:
             self.active_agents.pop(sub.agent_id, None)
+
+    async def handle_scheduled(self, task: ScheduledTask):
+        """Run a scheduled task through a SubAgent. Suppress Telegram/Obsidian for HEARTBEAT_OK."""
+        sub = SubAgent(
+            agent_type=task.agent,
+            task_description=task.prompt,
+            llm=self.llm,
+            tools=self.tools,
+            db=self.db,
+        )
+        try:
+            result = await sub.run()
+        except Exception as e:
+            if self.telegram:
+                await self.telegram.send_message(
+                    f"❌ Scheduled Task Fehler: {task.name}\n{str(e)[:300]}"
+                )
+            return
+
+        if result.startswith("HEARTBEAT_OK"):
+            # Suppress Telegram and Obsidian — silent success
+            return
+
+        # Write result to Obsidian
+        self.obsidian_writer.write_result(
+            title=task.name,
+            typ="report",
+            content=result,
+        )
+
+        # Send Telegram summary
+        if self.telegram:
+            summary = result[:500] if len(result) <= 500 else result[:497] + "..."
+            await self.telegram.send_message(
+                f"🕐 Scheduled: {task.name}\n\n{summary}"
+            )
 
     def get_status(self) -> dict:
         return {
