@@ -9,26 +9,18 @@ VAULT_PREFIX = "KI-Büro"
 # Vault structure that gets created on first use
 VAULT_STRUCTURE = {
     VAULT_PREFIX: {
+        "Inbox.md": "# Inbox\n\nHier landen neue Aufgaben und Ideen.\n\n"
+            "<!-- Format: - [ ] Beschreibung #agent-typ @projekt -->\n",
+        "Kanban.md": (
+            "# Kanban Board\n\n"
+            "## Backlog\n\n## In Progress\n\n## Done\n\n## Archiv\n"
+        ),
+        "Schedules": {},
+        "Projekte": {},
+        "Ergebnisse": {},
         "Falkenstein": {
-            "Projekte": {},
             "Tasks": {},
             "Daily Reports": {},
-            "Notizen": {},
-            "Ergebnisse": {
-                "Recherchen": {},
-                "Guides": {},
-                "Cheat-Sheets": {},
-                "Reports": {},
-                "Code": {},
-            },
-        },
-        "Management": {
-            "Inbox.md": "# Inbox\n\nHier landen neue Aufgaben und Ideen.\n",
-            "Kanban.md": (
-                "# Kanban Board\n\n"
-                "## Backlog\n\n## In Progress\n\n## Done\n\n## Archiv\n"
-            ),
-            "Schedules": {},
         },
     },
 }
@@ -165,7 +157,7 @@ class ObsidianManagerTool(Tool):
     async def _inbox(self, content: str) -> ToolResult:
         if not content:
             return ToolResult(success=False, output="Parameter 'content' fehlt.")
-        inbox_path = self.vault / VAULT_PREFIX / "Management" / "Inbox.md"
+        inbox_path = self.vault / VAULT_PREFIX / "Inbox.md"
         inbox_path.parent.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
         entry = f"\n- [ ] [{timestamp}] {content}"
@@ -187,7 +179,7 @@ class ObsidianManagerTool(Tool):
 
         if project:
             # Project-specific todo
-            todo_path = self.vault / VAULT_PREFIX / "Falkenstein" / "Projekte" / project / "Tasks.md"
+            todo_path = self.vault / VAULT_PREFIX / "Projekte" / project / "Tasks.md"
             todo_path.parent.mkdir(parents=True, exist_ok=True)
             entry = f"\n- [ ] [{timestamp}] {content}"
             if not todo_path.exists():
@@ -198,7 +190,7 @@ class ObsidianManagerTool(Tool):
             return ToolResult(success=True, output=f"Todo hinzugefügt: {project}/Tasks.md")
         else:
             # General Kanban backlog
-            kanban_path = self.vault / VAULT_PREFIX / "Management" / "Kanban.md"
+            kanban_path = self.vault / VAULT_PREFIX / "Kanban.md"
             if kanban_path.exists():
                 text = kanban_path.read_text(encoding="utf-8")
                 # Add under Backlog section
@@ -220,7 +212,7 @@ class ObsidianManagerTool(Tool):
         """Create a new project folder with template files."""
         if not name:
             return ToolResult(success=False, output="Projektname fehlt.")
-        project_dir = self.vault / VAULT_PREFIX / "Falkenstein" / "Projekte" / name
+        project_dir = self.vault / VAULT_PREFIX / "Projekte" / name
         if project_dir.exists():
             return ToolResult(success=True, output=f"Projekt '{name}' existiert bereits.")
         try:
@@ -233,10 +225,8 @@ class ObsidianManagerTool(Tool):
             (project_dir / "Tasks.md").write_text(
                 f"# Tasks — {name}\n\n", encoding="utf-8",
             )
-            (project_dir / "Notizen.md").write_text(
-                f"# Notizen — {name}\n\n", encoding="utf-8",
-            )
-            return ToolResult(success=True, output=f"Projekt '{name}' angelegt mit README, Tasks, Notizen.")
+            (project_dir / "Ergebnisse").mkdir(exist_ok=True)
+            return ToolResult(success=True, output=f"Projekt '{name}' angelegt mit README, Tasks, Ergebnisse.")
         except Exception as e:
             return ToolResult(success=False, output=str(e))
 
@@ -250,7 +240,7 @@ class ObsidianManagerTool(Tool):
         """Write a completed task result to the appropriate location."""
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
         if project:
-            path_str = f"{VAULT_PREFIX}/Falkenstein/Projekte/{project}/Tasks.md"
+            path_str = f"{VAULT_PREFIX}/Projekte/{project}/Tasks.md"
             content = f"\n\n### {task_title} ✅\n*{agent_name}* — {timestamp}\n\n{result}"
             return await self._append(path_str, content)
         else:
