@@ -121,6 +121,20 @@ class Database:
         """)
         await self._conn.commit()
 
+        # Migrate existing tables — add columns if missing
+        await self._migrate()
+
+    async def _migrate(self):
+        """Add missing columns to existing tables (safe to run repeatedly)."""
+        for col, default in [("last_status", None), ("last_error", None)]:
+            try:
+                await self._conn.execute(
+                    f"ALTER TABLE schedules ADD COLUMN {col} TEXT"
+                )
+                await self._conn.commit()
+            except Exception:
+                pass  # column already exists
+
     # ------------------------------------------------------------------
     # Introspection
     # ------------------------------------------------------------------
