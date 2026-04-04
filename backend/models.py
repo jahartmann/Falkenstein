@@ -3,25 +3,23 @@ from enum import Enum
 
 
 class AgentRole(str, Enum):
-    PM = "pm"
-    TEAM_LEAD = "team_lead"
-    CODER_1 = "coder_1"
-    CODER_2 = "coder_2"
+    MAIN = "main"
+    CODER = "coder"
     RESEARCHER = "researcher"
     WRITER = "writer"
     OPS = "ops"
 
 
 class AgentState(str, Enum):
-    IDLE_WANDER = "idle_wander"
-    IDLE_TALK = "idle_talk"
-    IDLE_COFFEE = "idle_coffee"
-    IDLE_PHONE = "idle_phone"
-    IDLE_SIT = "idle_sit"
-    WORK_SIT = "work_sit"
-    WORK_TYPE = "work_type"
-    WORK_TOOL = "work_tool"
-    WORK_REVIEW = "work_review"
+    IDLE = "idle"
+    WORKING = "working"
+
+
+class SubAgentType(str, Enum):
+    CODER = "coder"
+    RESEARCHER = "researcher"
+    WRITER = "writer"
+    OPS = "ops"
 
 
 class TaskStatus(str, Enum):
@@ -39,22 +37,6 @@ class MessageType(str, Enum):
     CHAT = "chat"
 
 
-class AgentTraits(BaseModel):
-    social: float = 0.5
-    focus: float = 0.5
-    confidence: float = 0.5
-    patience: float = 0.5
-    curiosity: float = 0.5
-    leadership: float = 0.3
-
-
-class AgentMood(BaseModel):
-    energy: float = 0.8
-    stress: float = 0.1
-    motivation: float = 0.7
-    frustration: float = 0.0
-
-
 class Position(BaseModel):
     x: int = 0
     y: int = 0
@@ -64,10 +46,8 @@ class AgentData(BaseModel):
     id: str
     name: str
     role: AgentRole
-    state: AgentState = AgentState.IDLE_SIT
+    state: AgentState = AgentState.IDLE
     position: Position = Position()
-    traits: AgentTraits = AgentTraits()
-    mood: AgentMood = AgentMood()
     current_task_id: int | None = None
 
 
@@ -89,12 +69,3 @@ class MessageData(BaseModel):
     project: str | None = None
     type: MessageType
     content: str
-
-
-class RelationshipData(BaseModel):
-    agent_a: str
-    agent_b: str
-    trust: float = 0.5
-    synergy: float = 0.5
-    friendship: float = 0.5
-    respect: float = 0.5
