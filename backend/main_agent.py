@@ -3,10 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
-from backend.sub_agent import SubAgent
 from backend.obsidian_writer import ObsidianWriter
 from backend.models import TaskData, TaskStatus
-from backend.scheduler import Scheduler
 from backend.dynamic_agent import DynamicAgent
 from backend.agent_identity import select_agent, load_agent_pool
 from backend.memory.soul_memory import SoulMemory
@@ -1041,6 +1039,17 @@ class MainAgent:
                         self.obsidian_writer.write_result,
                         title=title, typ="report", content=accumulated_context, project=project,
                     )
+                except Exception:
+                    pass
+
+            # Review gate before sending
+            if self.review_gate:
+                try:
+                    review = await self.review_gate.review(
+                        answer=accumulated_context, original_request=original_text,
+                    )
+                    if review.verdict == "REVISE" and review.revised:
+                        accumulated_context = review.revised
                 except Exception:
                     pass
 
