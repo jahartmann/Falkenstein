@@ -47,11 +47,53 @@ class MainAgent:
             open_tasks = await self.db.get_open_tasks()
             if open_tasks:
                 tasks_str = ", ".join(f"#{t.id} {t.title} ({t.status.value})" for t in open_tasks[:10])
-                lines.append(f"Offene Tasks ({len(open_tasks)}): {tasks_str}")
+                lines.append(f"Offene Tasks DB ({len(open_tasks)}): {tasks_str}")
             else:
-                lines.append("Offene Tasks: keine")
+                lines.append("Offene Tasks DB: keine")
         except Exception:
-            lines.append("Offene Tasks: DB nicht verfügbar")
+            pass
+        # Obsidian Inbox + Kanban
+        try:
+            inbox = self.obsidian_writer.kanban_path.parent / "Inbox.md"
+            if inbox.exists():
+                content = inbox.read_text(encoding="utf-8")
+                todos = [l.strip() for l in content.splitlines() if l.strip().startswith("- [ ]")]
+                if todos:
+                    lines.append(f"Obsidian Inbox ({len(todos)} offen):")
+                    for t in todos[:10]:
+                        lines.append(f"  {t}")
+                else:
+                    lines.append("Obsidian Inbox: leer")
+            kanban = self.obsidian_writer.kanban_path
+            if kanban.exists():
+                content = kanban.read_text(encoding="utf-8")
+                backlog = []
+                in_progress = []
+                in_section = None
+                for line in content.splitlines():
+                    if line.startswith("## Backlog"):
+                        in_section = "backlog"
+                    elif line.startswith("## In Progress"):
+                        in_section = "in_progress"
+                    elif line.startswith("## "):
+                        in_section = None
+                    elif in_section and line.strip().startswith("- ["):
+                        if in_section == "backlog":
+                            backlog.append(line.strip())
+                        elif in_section == "in_progress":
+                            in_progress.append(line.strip())
+                if backlog:
+                    lines.append(f"Kanban Backlog ({len(backlog)}):")
+                    for t in backlog[:5]:
+                        lines.append(f"  {t}")
+                if in_progress:
+                    lines.append(f"Kanban In Progress ({len(in_progress)}):")
+                    for t in in_progress[:5]:
+                        lines.append(f"  {t}")
+                if not backlog and not in_progress:
+                    lines.append("Kanban: leer")
+        except Exception:
+            pass
         return "\n".join(lines)
 
     async def classify(self, message: str) -> dict:
