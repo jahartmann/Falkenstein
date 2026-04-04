@@ -142,7 +142,16 @@ async def get_schedule_detail(schedule_id: int):
     row = await _db.get_schedule(schedule_id)
     if not row:
         return {"error": f"Schedule {schedule_id} not found"}
-    return row
+
+    # Add next runs preview
+    from backend.scheduler import parse_schedule, get_next_runs
+    parsed = parse_schedule(row.get("schedule", ""))
+    preview = []
+    if parsed.get("type") != "cron":
+        runs = get_next_runs(parsed, count=3)
+        preview = [r.isoformat() for r in runs]
+
+    return {**dict(row), "next_runs_preview": preview}
 
 
 @router.post("/schedules")
