@@ -22,8 +22,12 @@ export class OfficeWS {
     this.ws.onerror = () => this.ws.close();
 
     this.ws.onmessage = (e) => {
-      const msg = JSON.parse(e.data);
-      this._dispatch(msg);
+      try {
+        const msg = JSON.parse(e.data);
+        this._dispatch(msg);
+      } catch (err) {
+        console.warn('WS parse error:', err);
+      }
     };
   }
 
@@ -72,7 +76,8 @@ export class OfficeWS {
   _handleFullState(msg) {
     const agents = msg.active_agents || [];
     for (const a of agents) {
-      const id = a.agent_id || a.id || `agent-${Math.random().toString(36).slice(2, 8)}`;
+      const id = a.agent_id || a.id;
+      if (!id) continue;
       if (!this.am.agents.has(id)) {
         this.am.spawnAgent(id, a.agent_type || a.type || 'coder', a.task || '');
       }

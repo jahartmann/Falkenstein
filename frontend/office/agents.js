@@ -1,4 +1,4 @@
-import { findPath } from './pathfinding.js';
+import { findPath, findEntrance } from './pathfinding.js';
 
 const AGENT_CONFIG = {
   coder:      { sprite: 'Adam',   room: 'Team Büro' },
@@ -108,6 +108,7 @@ export class AgentManager {
     if (agent.pauseTimer) clearTimeout(agent.pauseTimer);
 
     agent.state = 'leaving';
+    this.scene.tweens.killTweensOf(agent.sprite);
     const entrance = this._findEntrance();
     this._walkTo(agent, entrance.x, entrance.y, () => {
       agent.sprite.destroy();
@@ -216,15 +217,7 @@ export class AgentManager {
   }
 
   _findEntrance() {
-    const grid = this.tm.collisionGrid;
-    const midX = Math.floor(grid[0].length / 2);
-    for (let y = grid.length - 1; y >= 0; y--) {
-      for (let dx = 0; dx < 10; dx++) {
-        if (grid[y][midX + dx] === 0) return { x: midX + dx, y };
-        if (grid[y][midX - dx] === 0) return { x: midX - dx, y };
-      }
-    }
-    return { x: midX, y: grid.length - 2 };
+    return findEntrance(this.tm.collisionGrid);
   }
 
   _findFreeDesk(roomName) {

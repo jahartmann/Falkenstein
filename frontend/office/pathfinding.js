@@ -97,3 +97,15 @@ export function findPath(grid, startX, startY, endX, endY, dynamicBlocked = null
 
   return null;
 }
+
+/** Find the entrance tile (bottom-center walkable tile) */
+export function findEntrance(grid) {
+  const midX = Math.floor(grid[0].length / 2);
+  for (let y = grid.length - 1; y >= 0; y--) {
+    for (let dx = 0; dx < 10; dx++) {
+      if (midX + dx < grid[0].length && grid[y][midX + dx] === 0) return { x: midX + dx, y };
+      if (midX - dx >= 0 && grid[y][midX - dx] === 0) return { x: midX - dx, y };
+    }
+  }
+  return { x: midX, y: grid.length - 2 };
+}

@@ -1,3 +1,5 @@
+import { findEntrance } from './pathfinding.js';
+
 const INTERACT_RADIUS = 2;
 
 export class ObjectManager {
@@ -215,12 +217,7 @@ export class ObjectManager {
   }
 
   _findEntrance() {
-    const grid = this.tm.collisionGrid;
-    const midX = Math.floor(grid[0].length / 2);
-    for (let y = grid.length - 1; y >= 0; y--) {
-      if (grid[y][midX] === 0) return { x: midX, y };
-    }
-    return { x: midX, y: grid.length - 2 };
+    return findEntrance(this.tm.collisionGrid);
   }
 
   _esc(str) {
