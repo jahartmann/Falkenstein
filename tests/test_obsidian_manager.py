@@ -64,7 +64,7 @@ async def test_daily_report(tool, tmp_path):
     result = await tool.execute({"action": "daily_report", "content": "Alles erledigt heute."})
     assert result.success
     today = datetime.date.today().isoformat()
-    report = (tmp_path / "KI-Büro" / "Falkenstein" / "Daily Reports" / f"{today}.md").read_text()
+    report = (tmp_path / "KI-Büro" / "Reports" / f"{today}.md").read_text()
     assert "Alles erledigt" in report
     assert today in report
 
@@ -74,27 +74,9 @@ async def test_daily_report_append(tool, tmp_path):
     await tool.execute({"action": "daily_report", "content": "Morgens"})
     await tool.execute({"action": "daily_report", "content": "Abends"})
     today = datetime.date.today().isoformat()
-    report = (tmp_path / "KI-Büro" / "Falkenstein" / "Daily Reports" / f"{today}.md").read_text()
+    report = (tmp_path / "KI-Büro" / "Reports" / f"{today}.md").read_text()
     assert "Morgens" in report
     assert "Abends" in report
-
-
-@pytest.mark.asyncio
-async def test_inbox(tool, tmp_path):
-    result = await tool.execute({"action": "inbox", "content": "Neue Idee prüfen"})
-    assert result.success
-    inbox = (tmp_path / "KI-Büro" / "Inbox.md").read_text()
-    assert "Neue Idee" in inbox
-    assert "- [ ]" in inbox
-
-
-@pytest.mark.asyncio
-async def test_inbox_multiple(tool, tmp_path):
-    await tool.execute({"action": "inbox", "content": "Aufgabe 1"})
-    await tool.execute({"action": "inbox", "content": "Aufgabe 2"})
-    inbox = (tmp_path / "KI-Büro" / "Inbox.md").read_text()
-    assert "Aufgabe 1" in inbox
-    assert "Aufgabe 2" in inbox
 
 
 @pytest.mark.asyncio
@@ -118,4 +100,90 @@ async def test_unknown_action(tool):
 def test_schema(tool):
     schema = tool.schema()
     assert "action" in schema["properties"]
-    assert "inbox" in schema["properties"]["action"]["enum"]
+    assert "daily_report" in schema["properties"]["action"]["enum"]
+    assert "inbox" not in schema["properties"]["action"]["enum"]
+    assert "todo" not in schema["properties"]["action"]["enum"]
+
+
+@pytest.mark.asyncio
+async def test_create_project(tool, tmp_path):
+    result = await tool.execute({"action": "project", "content": "TestProjekt"})
+    assert result.success
+    project_dir = tmp_path / "KI-Büro" / "Projekte" / "TestProjekt"
+    assert project_dir.exists()
+    readme = (project_dir / "README.md").read_text()
+    assert "TestProjekt" in readme
+    assert "In Arbeit" in readme
+    # No Tasks.md or Ergebnisse subfolder
+    assert not (project_dir / "Tasks.md").exists()
+    assert not (project_dir / "Ergebnisse").exists()
+
+
+@pytest.mark.asyncio
+async def test_create_project_already_exists(tool, tmp_path):
+    await tool.execute({"action": "project", "content": "Doppelt"})
+    result = await tool.execute({"action": "project", "content": "Doppelt"})
+    assert result.success
+    assert "existiert" in result.output
+
+
+@pytest.mark.asyncio
+async def test_create_project_no_name(tool):
+    result = await tool.execute({"action": "project", "content": ""})
+    assert not result.success
+
+
+@pytest.mark.asyncio
+async def test_write_task_result_with_project(tool, tmp_path):
+    # Create project first
+    await tool.execute({"action": "project", "content": "MyProject"})
+    result = await tool.write_task_result("Test Task", "Some result", "MyProject", "coder-1")
+    assert result.success
+    # Check file was written in project folder
+    projekte = tmp_path / "KI-Büro" / "Projekte" / "MyProject"
+    md_files = [f for f in projekte.iterdir() if f.suffix == ".md" and f.name != "README.md"]
+    assert len(md_files) == 1
+    content = md_files[0].read_text()
+    assert "Test Task" in content
+    assert "coder-1" in content
+
+
+@pytest.mark.asyncio
+async def test_write_task_result_without_project(tool, tmp_path):
+    result = await tool.write_task_result("General Task", "Result text", None, "writer-1")
+    assert result.success
+    wissen = tmp_path / "KI-Büro" / "Wissen"
+    md_files = list(wissen.glob("*.md"))
+    assert len(md_files) == 1
+    content = md_files[0].read_text()
+    assert "General Task" in content
+    assert "writer-1" in content
+
+
+@pytest.mark.asyncio
+async def test_log_escalation(tool, tmp_path):
+    result = await tool.log_escalation("ops-1", "Deploy failed", "Timeout after 30s")
+    assert result.success
+    today = datetime.date.today().isoformat()
+    report = (tmp_path / "KI-Büro" / "Reports" / f"{today}.md").read_text()
+    assert "Eskalation" in report
+    assert "Deploy failed" in report
+
+
+@pytest.mark.asyncio
+async def test_init_vault(tool, tmp_path):
+    result = await tool.execute({"action": "init_vault"})
+    assert result.success
+    assert (tmp_path / "KI-Büro" / "Wissen").is_dir()
+    assert (tmp_path / "KI-Büro" / "Projekte").is_dir()
+    assert (tmp_path / "KI-Büro" / "Reports").is_dir()
+
+
+@pytest.mark.asyncio
+async def test_vault_structure_no_legacy_folders(tool, tmp_path):
+    """Ensure old structure artifacts are not created."""
+    assert not (tmp_path / "KI-Büro" / "Inbox.md").exists()
+    assert not (tmp_path / "KI-Büro" / "Kanban.md").exists()
+    assert not (tmp_path / "KI-Büro" / "Schedules").exists()
+    assert not (tmp_path / "KI-Büro" / "Falkenstein").exists()
+    assert not (tmp_path / "KI-Büro" / "Ergebnisse").exists()

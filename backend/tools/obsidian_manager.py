@@ -9,19 +9,9 @@ VAULT_PREFIX = "KI-Büro"
 # Vault structure that gets created on first use
 VAULT_STRUCTURE = {
     VAULT_PREFIX: {
-        "Inbox.md": "# Inbox\n\nHier landen neue Aufgaben und Ideen.\n\n"
-            "<!-- Format: - [ ] Beschreibung #agent-typ @projekt -->\n",
-        "Kanban.md": (
-            "# Kanban Board\n\n"
-            "## Backlog\n\n## In Progress\n\n## Done\n\n## Archiv\n"
-        ),
-        "Schedules": {},
+        "Wissen": {},
         "Projekte": {},
-        "Ergebnisse": {},
-        "Falkenstein": {
-            "Tasks": {},
-            "Daily Reports": {},
-        },
+        "Reports": {},
     },
 }
 
@@ -30,9 +20,9 @@ class ObsidianManagerTool(Tool):
     name = "obsidian_manager"
     mutating = True
     description = (
-        "Obsidian Vault verwalten: Notizen lesen/schreiben, Projekte anlegen, "
-        "Daily Reports, Inbox, Todos, Kanban. "
-        "Actions: read, write, append, list, daily_report, inbox, todo, init_vault, project."
+        "Obsidian Wissensbasis verwalten: Notizen lesen/schreiben, Projekte anlegen, "
+        "Daily Reports, Ordner erstellen. "
+        "Actions: read, write, append, list, daily_report, project, init_vault."
     )
 
     def __init__(self, vault_path: Path):
@@ -70,8 +60,6 @@ class ObsidianManagerTool(Tool):
             "append": lambda: self._append(path_str, params.get("content", "")),
             "list": lambda: self._list(path_str or "."),
             "daily_report": lambda: self._daily_report(params.get("content", "")),
-            "inbox": lambda: self._inbox(params.get("content", "")),
-            "todo": lambda: self._todo(params.get("content", ""), params.get("project")),
             "project": lambda: self._create_project(params.get("content", "")),
             "init_vault": lambda: self._init_vault(),
         }
@@ -140,7 +128,7 @@ class ObsidianManagerTool(Tool):
         if not content:
             return ToolResult(success=False, output="Parameter 'content' fehlt.")
         today = datetime.date.today().isoformat()
-        report_dir = self.vault / VAULT_PREFIX / "Falkenstein" / "Daily Reports"
+        report_dir = self.vault / VAULT_PREFIX / "Reports"
         report_dir.mkdir(parents=True, exist_ok=True)
         report_path = report_dir / f"{today}.md"
         header = f"# Daily Report — {today}\n\n"
@@ -154,62 +142,8 @@ class ObsidianManagerTool(Tool):
         except Exception as e:
             return ToolResult(success=False, output=str(e))
 
-    async def _inbox(self, content: str) -> ToolResult:
-        if not content:
-            return ToolResult(success=False, output="Parameter 'content' fehlt.")
-        inbox_path = self.vault / VAULT_PREFIX / "Inbox.md"
-        inbox_path.parent.mkdir(parents=True, exist_ok=True)
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-        entry = f"\n- [ ] [{timestamp}] {content}"
-        try:
-            if not inbox_path.exists():
-                inbox_path.write_text(f"# Inbox\n{entry}", encoding="utf-8")
-            else:
-                with open(inbox_path, "a", encoding="utf-8") as f:
-                    f.write(entry)
-            return ToolResult(success=True, output="Inbox-Eintrag hinzugefügt.")
-        except Exception as e:
-            return ToolResult(success=False, output=str(e))
-
-    async def _todo(self, content: str, project: str | None = None) -> ToolResult:
-        """Add a todo item to the project's task file or general Kanban."""
-        if not content:
-            return ToolResult(success=False, output="Parameter 'content' fehlt.")
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-
-        if project:
-            # Project-specific todo
-            todo_path = self.vault / VAULT_PREFIX / "Projekte" / project / "Tasks.md"
-            todo_path.parent.mkdir(parents=True, exist_ok=True)
-            entry = f"\n- [ ] [{timestamp}] {content}"
-            if not todo_path.exists():
-                todo_path.write_text(f"# Tasks — {project}\n{entry}", encoding="utf-8")
-            else:
-                with open(todo_path, "a", encoding="utf-8") as f:
-                    f.write(entry)
-            return ToolResult(success=True, output=f"Todo hinzugefügt: {project}/Tasks.md")
-        else:
-            # General Kanban backlog
-            kanban_path = self.vault / VAULT_PREFIX / "Kanban.md"
-            if kanban_path.exists():
-                text = kanban_path.read_text(encoding="utf-8")
-                # Add under Backlog section
-                text = text.replace(
-                    "## Backlog\n",
-                    f"## Backlog\n\n- [ ] [{timestamp}] {content}\n",
-                    1,
-                )
-                kanban_path.write_text(text, encoding="utf-8")
-            else:
-                kanban_path.parent.mkdir(parents=True, exist_ok=True)
-                kanban_path.write_text(
-                    f"# Kanban Board\n\n## Backlog\n\n- [ ] [{timestamp}] {content}\n\n## In Arbeit\n\n## Review\n\n## Fertig\n",
-                    encoding="utf-8",
-                )
-            return ToolResult(success=True, output="Todo zum Kanban-Backlog hinzugefügt.")
-
     async def _create_project(self, name: str) -> ToolResult:
-        """Create a new project folder with template files."""
+        """Create a new project folder with README."""
         if not name:
             return ToolResult(success=False, output="Projektname fehlt.")
         project_dir = self.vault / VAULT_PREFIX / "Projekte" / name
@@ -222,11 +156,7 @@ class ObsidianManagerTool(Tool):
                 f"# {name}\n\nErstellt: {today}\n\n## Beschreibung\n\n## Status\n\nIn Arbeit\n",
                 encoding="utf-8",
             )
-            (project_dir / "Tasks.md").write_text(
-                f"# Tasks — {name}\n\n", encoding="utf-8",
-            )
-            (project_dir / "Ergebnisse").mkdir(exist_ok=True)
-            return ToolResult(success=True, output=f"Projekt '{name}' angelegt mit README, Tasks, Ergebnisse.")
+            return ToolResult(success=True, output=f"Projekt '{name}' angelegt.")
         except Exception as e:
             return ToolResult(success=False, output=str(e))
 
@@ -238,14 +168,17 @@ class ObsidianManagerTool(Tool):
     async def write_task_result(self, task_title: str, result: str,
                                 project: str | None, agent_name: str) -> ToolResult:
         """Write a completed task result to the appropriate location."""
+        today = datetime.date.today().isoformat()
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+        slug = task_title.lower().replace(" ", "-")[:40]
+
         if project:
-            path_str = f"{VAULT_PREFIX}/Projekte/{project}/Tasks.md"
-            content = f"\n\n### {task_title} ✅\n*{agent_name}* — {timestamp}\n\n{result}"
-            return await self._append(path_str, content)
+            path_str = f"{VAULT_PREFIX}/Projekte/{project}/{today}-{slug}.md"
         else:
-            content = f"[DONE] {task_title} ({agent_name}): {result[:300]}"
-            return await self._inbox(content)
+            path_str = f"{VAULT_PREFIX}/Wissen/{today}-{slug}.md"
+
+        content = f"# {task_title}\n\n*{agent_name}* — {timestamp}\n\n{result}"
+        return await self._write(path_str, content)
 
     async def log_escalation(self, agent_name: str, task_title: str,
                               details: str) -> ToolResult:
@@ -260,7 +193,7 @@ class ObsidianManagerTool(Tool):
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["read", "write", "append", "list", "daily_report", "inbox", "todo", "project", "init_vault"],
+                    "enum": ["read", "write", "append", "list", "daily_report", "project", "init_vault"],
                     "description": "Aktion im Obsidian Vault",
                 },
                 "path": {
@@ -269,11 +202,11 @@ class ObsidianManagerTool(Tool):
                 },
                 "content": {
                     "type": "string",
-                    "description": "Inhalt / Projektname / Todo-Text",
+                    "description": "Inhalt / Projektname",
                 },
                 "project": {
                     "type": "string",
-                    "description": "Projektname (für todo)",
+                    "description": "Projektname (für write_task_result)",
                 },
             },
             "required": ["action"],
