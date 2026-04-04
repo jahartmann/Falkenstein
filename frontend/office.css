@@ -1,0 +1,93 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { width: 100%; height: 100%; overflow: hidden; background: #1a1a2e; }
+
+#game-container { width: 100%; height: 100%; position: relative; }
+#game-container canvas { display: block; }
+
+/* HUD top bar */
+.hud-bar {
+  position: fixed; top: 0; left: 0; right: 0; height: 36px; z-index: 100;
+  background: rgba(16,16,32,0.85); border-bottom: 2px solid #2a2a4a;
+  display: flex; align-items: center; padding: 0 16px; gap: 24px;
+  font-family: 'Courier New', monospace; font-size: 13px; color: #c8c8e0;
+  pointer-events: auto;
+}
+.hud-bar .hud-label { color: #8888aa; font-size: 11px; text-transform: uppercase; margin-right: 4px; }
+.hud-bar .hud-value { color: #e0e0ff; font-weight: bold; }
+.hud-bar .hud-title { font-weight: bold; color: #7b7bff; font-size: 14px; margin-right: 16px; }
+.hud-bar .hud-spacer { flex: 1; }
+.hud-dot { width: 8px; height: 8px; border-radius: 50%; background: #ff4444; display: inline-block; margin-right: 4px; }
+.hud-dot.connected { background: #44ff88; }
+
+/* Minimap */
+.minimap {
+  position: fixed; bottom: 12px; right: 12px; z-index: 100;
+  width: 180px; height: 144px;
+  background: rgba(16,16,32,0.9); border: 2px solid #2a2a4a; border-radius: 4px;
+  pointer-events: auto; cursor: pointer;
+}
+.minimap canvas { width: 100%; height: 100%; image-rendering: pixelated; }
+
+/* Popup panels */
+.panel-overlay {
+  position: fixed; inset: 0; z-index: 200;
+  background: rgba(0,0,0,0.5);
+  display: flex; align-items: center; justify-content: center;
+  pointer-events: auto;
+}
+.panel-overlay.hidden { display: none; }
+.panel-box {
+  background: #1e1e3a; border: 3px solid #4a4a7a; border-radius: 8px;
+  min-width: 400px; max-width: 700px; max-height: 80vh; overflow-y: auto;
+  padding: 20px; color: #c8c8e0; font-family: 'Courier New', monospace; font-size: 13px;
+  image-rendering: pixelated;
+}
+.panel-box h2 { color: #9b9bff; font-size: 16px; margin-bottom: 12px; border-bottom: 1px solid #3a3a5a; padding-bottom: 8px; }
+.panel-close {
+  position: absolute; top: 8px; right: 12px; background: none; border: none;
+  color: #8888aa; font-size: 20px; cursor: pointer;
+}
+.panel-close:hover { color: #ff6666; }
+
+/* Kanban board */
+.kanban { display: flex; gap: 12px; }
+.kanban-col { flex: 1; min-width: 0; }
+.kanban-col h3 { font-size: 12px; color: #8888aa; text-transform: uppercase; margin-bottom: 8px; }
+.kanban-card {
+  background: #2a2a4a; border-left: 3px solid #4a4a7a; border-radius: 4px;
+  padding: 8px; margin-bottom: 6px; font-size: 12px;
+}
+.kanban-card.status-open { border-left-color: #6688ff; }
+.kanban-card.status-in_progress { border-left-color: #ffaa44; }
+.kanban-card.status-done { border-left-color: #44ff88; }
+.kanban-card.status-failed { border-left-color: #ff4444; }
+.kanban-card .card-title { color: #e0e0ff; margin-bottom: 4px; }
+.kanban-card .card-agent { color: #8888aa; font-size: 11px; }
+
+/* Schedule board */
+.schedule-list { list-style: none; }
+.schedule-list li {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 8px; border-bottom: 1px solid #2a2a4a;
+}
+.schedule-list .sched-name { color: #e0e0ff; }
+.schedule-list .sched-time { color: #ffaa44; font-size: 12px; }
+.schedule-list .sched-agent { color: #8888aa; font-size: 11px; }
+
+/* Coffee receipt */
+.coffee-receipt {
+  font-family: 'Courier New', monospace; background: #f5f0e0; color: #333;
+  padding: 16px; border-radius: 2px; text-align: center; max-width: 260px; margin: 0 auto;
+}
+.coffee-receipt h3 { font-size: 14px; margin-bottom: 8px; }
+.coffee-receipt .receipt-line { display: flex; justify-content: space-between; padding: 2px 0; font-size: 12px; }
+.coffee-receipt hr { border: none; border-top: 1px dashed #999; margin: 8px 0; }
+
+/* Interaction hint */
+.interact-hint {
+  position: fixed; bottom: 48px; left: 50%; transform: translateX(-50%); z-index: 100;
+  background: rgba(16,16,32,0.9); border: 1px solid #4a4a7a; border-radius: 4px;
+  padding: 6px 16px; color: #c8c8e0; font-family: 'Courier New', monospace; font-size: 12px;
+  pointer-events: none; transition: opacity 0.2s;
+}
+.interact-hint.hidden { opacity: 0; }

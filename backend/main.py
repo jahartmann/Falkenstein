@@ -88,7 +88,7 @@ async def lifespan(app: FastAPI):
 
     tools = ToolRegistry()
     tools.register(FileManagerTool(workspace_path=workspace))
-    tools.register(WebSurferTool())
+    tools.register(WebSurferTool(config_service=config_service))
     tools.register(ShellRunnerTool(workspace_path=workspace))
     tools.register(CodeExecutorTool(workspace_path=workspace))
     tools.register(ObsidianManagerTool(vault_path=vault_path))
@@ -134,7 +134,7 @@ async def lifespan(app: FastAPI):
     admin_api.set_dependencies(
         db=db, scheduler=scheduler, config_service=config_service,
         main_agent=main_agent, budget_tracker=budget_tracker,
-        llm_router=llm_router,
+        llm_router=llm_router, fact_memory=fact_memory,
     )
     admin_api.init(start_time=_time.time())
 
@@ -175,6 +175,14 @@ app.include_router(admin_router)
 frontend_dir = Path(__file__).parent.parent / "frontend"
 if frontend_dir.exists():
     app.mount("/static", StaticFiles(directory=str(frontend_dir)), name="static")
+
+
+@app.get("/office")
+async def office():
+    office_path = frontend_dir / "office.html"
+    if office_path.exists():
+        return FileResponse(office_path)
+    return {"error": "office.html not found"}
 
 
 @app.get("/")

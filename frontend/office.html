@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Falkenstein — Büro</title>
+  <link rel="stylesheet" href="/static/office.css">
+</head>
+<body>
+  <div id="game-container"></div>
+
+  <!-- HUD -->
+  <div class="hud-bar">
+    <span class="hud-title">Falkenstein Büro</span>
+    <span class="hud-label">Agents</span><span class="hud-value" id="hud-agents">0</span>
+    <span class="hud-label">Tasks</span><span class="hud-value" id="hud-tasks">0</span>
+    <span class="hud-label">Schedules</span><span class="hud-value" id="hud-schedules">0</span>
+    <span class="hud-spacer"></span>
+    <span class="hud-label">Zoom</span><span class="hud-value" id="hud-zoom">1.0x</span>
+    <span class="hud-dot" id="hud-ws" title="WebSocket"></span>
+  </div>
+
+  <!-- Minimap -->
+  <div class="minimap" id="minimap">
+    <canvas id="minimap-canvas" width="180" height="144"></canvas>
+  </div>
+
+  <!-- Panel overlay -->
+  <div class="panel-overlay hidden" id="panel-overlay" onclick="if(event.target===this)window.panelManager?.close()">
+    <div class="panel-box" id="panel-content" style="position:relative;"></div>
+  </div>
+
+  <!-- Interaction hint -->
+  <div class="interact-hint hidden" id="interact-hint">[E] Interagieren</div>
+
+  <script src="https://cdn.jsdelivr.net/npm/phaser@3.80.1/dist/phaser.min.js"></script>
+  <script type="module" src="/static/office/main.js"></script>
+</body>
+</html>
