@@ -11,6 +11,55 @@ VAULT_PREFIX = "KI-Büro"
 class ObsidianWriter:
     """Writes results and reports to the Obsidian knowledge base."""
 
+    _TEMPLATES = {
+        "recherche": (
+            "---\n"
+            "typ: recherche\n"
+            "tags: [ki-recherche, {tag}]\n"
+            "erstellt: {date}\n"
+            "titel: \"{title}\"\n"
+            "---\n\n"
+            "# {title}\n\n"
+            "{content}\n\n"
+            "---\n"
+            "*Automatisch erstellt von Falkenstein am {date}*\n"
+        ),
+        "guide": (
+            "---\n"
+            "typ: guide\n"
+            "tags: [ki-guide, {tag}]\n"
+            "erstellt: {date}\n"
+            "titel: \"{title}\"\n"
+            "---\n\n"
+            "# {title}\n\n"
+            "{content}\n\n"
+            "---\n"
+            "*Automatisch erstellt von Falkenstein am {date}*\n"
+        ),
+        "report": (
+            "---\n"
+            "typ: report\n"
+            "tags: [ki-report, {tag}]\n"
+            "erstellt: {date}\n"
+            "titel: \"{title}\"\n"
+            "---\n\n"
+            "# {title}\n\n"
+            "{content}\n\n"
+            "---\n"
+            "*Automatisch erstellt von Falkenstein am {date}*\n"
+        ),
+        "code": (
+            "---\n"
+            "typ: code\n"
+            "tags: [ki-code, {tag}]\n"
+            "erstellt: {date}\n"
+            "titel: \"{title}\"\n"
+            "---\n\n"
+            "# {title}\n\n"
+            "{content}\n"
+        ),
+    }
+
     def __init__(self, vault_path: Path):
         self.vault = vault_path.resolve()
         self.wissen_dir = self.vault / VAULT_PREFIX / "Wissen"
@@ -29,7 +78,7 @@ class ObsidianWriter:
         self.reports_dir.mkdir(parents=True, exist_ok=True)
 
     def write_result(self, title: str, typ: str, content: str, project: str | None = None) -> Path:
-        """Write a knowledge artifact to Wissen/ or Projekte/<project>/."""
+        """Write a knowledge artifact with structured template."""
         today = datetime.date.today().isoformat()
         slug = self._slugify(title)
         filename = f"{today}-{slug}.md"
@@ -41,13 +90,10 @@ class ObsidianWriter:
 
         path.parent.mkdir(parents=True, exist_ok=True)
 
-        frontmatter = (
-            f"---\n"
-            f"typ: {typ}\n"
-            f"erstellt: {today}\n"
-            f"---\n\n"
-        )
-        path.write_text(frontmatter + content, encoding="utf-8")
+        tag = self._slugify(project or "allgemein")
+        template = self._TEMPLATES.get(typ.lower(), self._TEMPLATES["recherche"])
+        text = template.format(title=title, date=today, content=content, tag=tag)
+        path.write_text(text, encoding="utf-8")
         return path
 
     def write_report(self, content: str) -> Path:
