@@ -6,8 +6,8 @@ from pathlib import Path
 from watchdog.events import FileModifiedEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
-# Regex for unchecked checkbox items only
-TODO_RE = re.compile(r"^- \[ \] (.+)$")
+# Regex for unchecked checkbox items, optionally with #agent_type and @project tags
+TODO_RE = re.compile(r"^- \[ \] (.+?)(?:\s+#(\w+))?(?:\s+@([\w-]+))?\s*$")
 
 
 def _hash_line(line: str) -> str:
@@ -53,11 +53,11 @@ class ObsidianWatcher:
         """Return list of all markdown files we actively watch."""
         files: list[Path] = []
 
-        inbox = self.vault / "KI-Büro" / "Management" / "Inbox.md"
+        inbox = self.vault / "KI-Büro" / "Inbox.md"
         if inbox.exists():
             files.append(inbox)
 
-        projekte_root = self.vault / "KI-Büro" / "Falkenstein" / "Projekte"
+        projekte_root = self.vault / "KI-Büro" / "Projekte"
         if projekte_root.exists():
             for tasks_file in sorted(projekte_root.glob("*/Tasks.md")):
                 files.append(tasks_file)
@@ -78,27 +78,28 @@ class ObsidianWatcher:
 
         for path in self._all_candidate_files():
             key = str(path)
-            current_lines = self._read_todo_lines(path)
+            current_items = self._read_todo_lines(path)
             known_hashes = self._known.get(key, set())
 
-            new_todos = []
+            new_items = []
             current_hashes: set[str] = set()
-            for line in current_lines:
-                h = _hash_line(line)
+            for item in current_items:
+                h = _hash_line(item["content"])
                 current_hashes.add(h)
                 if h not in known_hashes:
-                    new_todos.append(line)
+                    new_items.append(item)
 
             # Replace: track current state, not cumulative history
             self._known[key] = current_hashes
 
             project = _extract_project(path)
-            for line in new_todos:
+            for item in new_items:
                 results.append(
                     {
-                        "content": line,
+                        "content": item["content"],
                         "source_file": str(path),
-                        "project": project,
+                        "project": item.get("project_tag") or project,
+                        "agent_type": item.get("agent_type"),
                     }
                 )
 
@@ -112,11 +113,11 @@ class ObsidianWatcher:
         handler = _VaultEventHandler(self)
         self._observer = Observer()
 
-        mgmt_dir = self.vault / "KI-Büro" / "Management"
-        projekte_dir = self.vault / "KI-Büro" / "Falkenstein" / "Projekte"
+        inbox_dir = self.vault / "KI-Büro"
+        projekte_dir = self.vault / "KI-Büro" / "Projekte"
 
-        if mgmt_dir.exists():
-            self._observer.schedule(handler, str(mgmt_dir), recursive=False)
+        if inbox_dir.exists():
+            self._observer.schedule(handler, str(inbox_dir), recursive=False)
         if projekte_dir.exists():
             self._observer.schedule(handler, str(projekte_dir), recursive=True)
 
@@ -145,25 +146,30 @@ class ObsidianWatcher:
         return self.watched_files
 
     @staticmethod
-    def _read_todo_lines(path: Path) -> list[str]:
-        """Return list of unchecked todo line contents (the text after `- [ ] `)."""
+    def _read_todo_lines(path: Path) -> list[dict]:
+        """Return list of unchecked todo items as dicts with content, agent_type, project_tag."""
         if not path.exists():
             return []
         try:
             text = path.read_text(encoding="utf-8")
         except OSError:
             return []
-        lines = []
+        items = []
         for raw in text.splitlines():
             m = TODO_RE.match(raw)
             if m:
-                lines.append(m.group(1))
-        return lines
+                items.append({
+                    "raw": m.group(0),
+                    "content": m.group(1).strip(),
+                    "agent_type": m.group(2),
+                    "project_tag": m.group(3),
+                })
+        return items
 
     @staticmethod
     def _read_todo_hashes(path: Path) -> set[str]:
         """Return set of SHA256 hashes for current unchecked todo lines."""
-        return {_hash_line(line) for line in ObsidianWatcher._read_todo_lines(path)}
+        return {_hash_line(item["content"]) for item in ObsidianWatcher._read_todo_lines(path)}
 
     # Called from watchdog thread — must not touch the event loop directly
     def _on_file_modified(self, file_path: str) -> None:
@@ -189,7 +195,7 @@ class ObsidianWatcher:
             changes = self.detect_changes()
             for change in changes:
                 if self._on_new_todo:
-                    await self._on_new_todo(change["content"], change["source_file"])
+                    await self._on_new_todo(change)
         except asyncio.CancelledError:
             pass
 

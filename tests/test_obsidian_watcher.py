@@ -14,11 +14,11 @@ from backend.obsidian_watcher import ObsidianWatcher
 @pytest.fixture
 def vault(tmp_path):
     """Create minimal vault structure."""
-    mgmt = tmp_path / "KI-Büro" / "Management"
-    mgmt.mkdir(parents=True)
-    (mgmt / "Inbox.md").write_text("# Inbox\n\n- [ ] [2026-04-01 10:00] Existing todo\n")
+    ki = tmp_path / "KI-Büro"
+    ki.mkdir(parents=True)
+    (ki / "Inbox.md").write_text("# Inbox\n\n- [ ] [2026-04-01 10:00] Existing todo\n")
 
-    proj = tmp_path / "KI-Büro" / "Falkenstein" / "Projekte" / "website"
+    proj = ki / "Projekte" / "website"
     proj.mkdir(parents=True)
     (proj / "Tasks.md").write_text("# Tasks — website\n\n- [ ] [2026-04-01 10:00] Old task\n")
     return tmp_path
@@ -41,7 +41,7 @@ def test_detects_new_inbox_todo(vault, callback):
     watcher = make_watcher(vault, callback)
     watcher.scan_files()
 
-    inbox = vault / "KI-Büro" / "Management" / "Inbox.md"
+    inbox = vault / "KI-Büro" / "Inbox.md"
     inbox.write_text(
         "# Inbox\n\n"
         "- [ ] [2026-04-01 10:00] Existing todo\n"
@@ -58,7 +58,7 @@ def test_ignores_checked_todos(vault, callback):
     watcher = make_watcher(vault, callback)
     watcher.scan_files()
 
-    inbox = vault / "KI-Büro" / "Management" / "Inbox.md"
+    inbox = vault / "KI-Büro" / "Inbox.md"
     inbox.write_text(
         "# Inbox\n\n"
         "- [x] [2026-04-01 10:00] Done item\n"
@@ -73,7 +73,7 @@ def test_ignores_non_todo_lines(vault, callback):
     watcher = make_watcher(vault, callback)
     watcher.scan_files()
 
-    inbox = vault / "KI-Büro" / "Management" / "Inbox.md"
+    inbox = vault / "KI-Büro" / "Inbox.md"
     inbox.write_text(
         "# Inbox\n\n"
         "- [ ] [2026-04-01 10:00] Existing todo\n"
@@ -90,7 +90,7 @@ def test_detects_project_todo(vault, callback):
     watcher = make_watcher(vault, callback)
     watcher.scan_files()
 
-    tasks = vault / "KI-Büro" / "Falkenstein" / "Projekte" / "website" / "Tasks.md"
+    tasks = vault / "KI-Büro" / "Projekte" / "website" / "Tasks.md"
     tasks.write_text(
         "# Tasks — website\n\n"
         "- [ ] [2026-04-01 10:00] Old task\n"
@@ -107,7 +107,7 @@ def test_no_duplicate_detection(vault, callback):
     watcher = make_watcher(vault, callback)
     watcher.scan_files()
 
-    inbox = vault / "KI-Büro" / "Management" / "Inbox.md"
+    inbox = vault / "KI-Büro" / "Inbox.md"
     inbox.write_text(
         "# Inbox\n\n"
         "- [ ] [2026-04-01 10:00] Existing todo\n"
@@ -125,7 +125,7 @@ def test_new_project_tasks_file(vault, callback):
     watcher = make_watcher(vault, callback)
     watcher.scan_files()
 
-    new_proj = vault / "KI-Büro" / "Falkenstein" / "Projekte" / "newproj"
+    new_proj = vault / "KI-Büro" / "Projekte" / "newproj"
     new_proj.mkdir(parents=True)
     (new_proj / "Tasks.md").write_text(
         "# Tasks — newproj\n\n"
@@ -142,7 +142,7 @@ def test_multiple_new_todos_at_once(vault, callback):
     watcher = make_watcher(vault, callback)
     watcher.scan_files()
 
-    inbox = vault / "KI-Büro" / "Management" / "Inbox.md"
+    inbox = vault / "KI-Büro" / "Inbox.md"
     inbox.write_text(
         "# Inbox\n\n"
         "- [ ] [2026-04-01 10:00] Existing todo\n"
@@ -178,11 +178,11 @@ def test_watched_files_property(vault, callback):
 def test_project_extraction_from_path(vault, callback):
     watcher = make_watcher(vault, callback)
 
-    tasks_path = vault / "KI-Büro" / "Falkenstein" / "Projekte" / "myproject" / "Tasks.md"
+    tasks_path = vault / "KI-Büro" / "Projekte" / "myproject" / "Tasks.md"
     from backend.obsidian_watcher import _extract_project
     assert _extract_project(tasks_path) == "myproject"
 
-    inbox_path = vault / "KI-Büro" / "Management" / "Inbox.md"
+    inbox_path = vault / "KI-Büro" / "Inbox.md"
     assert _extract_project(inbox_path) is None
 
 
@@ -201,7 +201,7 @@ async def test_debounce_calls_callback(vault, callback):
     watcher._loop = asyncio.get_running_loop()
     watcher.scan_files()
 
-    inbox = vault / "KI-Büro" / "Management" / "Inbox.md"
+    inbox = vault / "KI-Büro" / "Inbox.md"
     inbox.write_text(
         "# Inbox\n\n"
         "- [ ] [2026-04-01 10:00] Existing todo\n"
@@ -213,4 +213,53 @@ async def test_debounce_calls_callback(vault, callback):
 
     callback.assert_awaited()
     args = callback.call_args[0]
-    assert "Brand new todo" in args[0]  # content
+    assert "Brand new todo" in args[0]["content"]  # single dict argument
+
+
+# ---------------------------------------------------------------------------
+# New tests: #typ and @projekt tag parsing
+# ---------------------------------------------------------------------------
+
+def test_parses_agent_type_from_inbox(vault, callback):
+    watcher = make_watcher(vault, callback)
+    watcher.scan_files()
+    inbox = vault / "KI-Büro" / "Inbox.md"
+    inbox.write_text("# Inbox\n\n- [ ] Recherchiere Ollama-Alternativen #researcher\n")
+    changes = watcher.detect_changes()
+    assert len(changes) == 1
+    assert changes[0]["agent_type"] == "researcher"
+    assert "Recherchiere Ollama-Alternativen" in changes[0]["content"]
+
+
+def test_parses_project_from_inbox(vault, callback):
+    watcher = make_watcher(vault, callback)
+    watcher.scan_files()
+    inbox = vault / "KI-Büro" / "Inbox.md"
+    inbox.write_text("# Inbox\n\n- [ ] Fix den Login-Bug #coder @website\n")
+    changes = watcher.detect_changes()
+    assert len(changes) == 1
+    assert changes[0]["agent_type"] == "coder"
+    assert changes[0]["project"] == "website"
+    assert "Fix den Login-Bug" in changes[0]["content"]
+
+
+def test_parses_plain_inbox_todo(vault, callback):
+    watcher = make_watcher(vault, callback)
+    watcher.scan_files()
+    inbox = vault / "KI-Büro" / "Inbox.md"
+    inbox.write_text("# Inbox\n\n- [ ] Einfacher Task ohne Tags\n")
+    changes = watcher.detect_changes()
+    assert len(changes) == 1
+    assert changes[0]["agent_type"] is None
+    assert changes[0]["project"] is None
+
+
+def test_parses_only_project_tag(vault, callback):
+    watcher = make_watcher(vault, callback)
+    watcher.scan_files()
+    inbox = vault / "KI-Büro" / "Inbox.md"
+    inbox.write_text("# Inbox\n\n- [ ] Schreib Docs @falkenstein\n")
+    changes = watcher.detect_changes()
+    assert len(changes) == 1
+    assert changes[0]["agent_type"] is None
+    assert changes[0]["project"] == "falkenstein"
