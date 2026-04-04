@@ -3,170 +3,173 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Falki Dashboard</title>
+  <title>Falkenstein</title>
   <link rel="stylesheet" href="/static/dashboard.css">
 </head>
 <body>
+  <div class="app">
+    <!-- Sidebar -->
+    <nav class="sidebar">
+      <div class="sidebar-top">
+        <div class="sidebar-logo">F</div>
+        <button class="sidebar-btn active" data-section="dashboard" title="Dashboard">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+            <rect x="2" y="2" width="7" height="7" rx="1.5"/><rect x="11" y="2" width="7" height="7" rx="1.5"/>
+            <rect x="2" y="11" width="7" height="7" rx="1.5"/><rect x="11" y="11" width="7" height="7" rx="1.5"/>
+          </svg>
+        </button>
+        <button class="sidebar-btn" data-section="tasks" title="Tasks">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+            <rect x="3" y="3" width="14" height="14" rx="2"/><path d="M7 10l2 2 4-4"/>
+          </svg>
+        </button>
+        <button class="sidebar-btn" data-section="schedules" title="Schedules">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+            <circle cx="10" cy="10" r="7"/><path d="M10 6v4l2.5 2.5"/>
+          </svg>
+        </button>
+      </div>
+      <div class="sidebar-bottom">
+        <button class="sidebar-btn" data-section="config" title="Config">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+            <circle cx="10" cy="10" r="3"/><path d="M10 2v2m0 12v2M2 10h2m12 0h2M4.22 4.22l1.42 1.42m8.72 8.72l1.42 1.42M4.22 15.78l1.42-1.42m8.72-8.72l1.42-1.42"/>
+          </svg>
+        </button>
+        <div class="sidebar-status">
+          <div class="status-dot" id="ws-dot" title="WebSocket"></div>
+          <div class="status-dot" id="ollama-dot" title="Ollama"></div>
+        </div>
+      </div>
+    </nav>
 
-<!-- Header -->
-<div class="header">
-  <h1><span>Falki</span> Dashboard</h1>
-  <div class="ws-indicator">
-    <div class="ws-dot" id="ws-dot"></div>
-    <span id="ws-status">Verbinde...</span>
+    <!-- Main Content -->
+    <main class="content">
+      <!-- Dashboard Section -->
+      <section class="section active" id="section-dashboard">
+        <div class="section-header">
+          <h1>Dashboard</h1>
+          <div class="ws-indicator"><span id="ws-status">Verbinde...</span></div>
+        </div>
+        <div class="stats-row">
+          <div class="stat-card"><div class="stat-label">Aktive Agents</div><div class="stat-value" id="stat-agents">0</div></div>
+          <div class="stat-card"><div class="stat-label">Offene Tasks</div><div class="stat-value" id="stat-tasks">0</div></div>
+          <div class="stat-card"><div class="stat-label">Aktive Schedules</div><div class="stat-value" id="stat-schedules">0</div></div>
+          <div class="stat-card"><div class="stat-label">Fehler heute</div><div class="stat-value" id="stat-errors">0</div></div>
+        </div>
+        <div class="panels">
+          <div class="panel"><h2>Aktive Agents</h2><div id="agents-list" class="agents-list"><span class="text-muted">Keine aktiven Agents</span></div></div>
+          <div class="panel"><h2>Letzte Aktivität</h2><div id="activity-feed" class="activity-feed"><span class="text-muted">Keine Aktivität</span></div></div>
+        </div>
+      </section>
+
+      <!-- Tasks Section -->
+      <section class="section" id="section-tasks">
+        <div class="section-header">
+          <h1>Tasks</h1>
+          <button class="btn btn-primary" onclick="openModal('modal-task')">+ Neuer Task</button>
+        </div>
+        <div class="filter-bar">
+          <select id="filter-status" onchange="loadTasks()">
+            <option value="">Alle Status</option>
+            <option value="open">Open</option>
+            <option value="in_progress">In Progress</option>
+            <option value="done">Done</option>
+            <option value="failed">Failed</option>
+          </select>
+          <select id="filter-agent" onchange="loadTasks()">
+            <option value="">Alle Agents</option>
+            <option value="coder">Coder</option>
+            <option value="researcher">Researcher</option>
+            <option value="writer">Writer</option>
+            <option value="ops">Ops</option>
+          </select>
+          <input type="text" id="filter-search" placeholder="Suche..." oninput="debouncedLoadTasks()">
+        </div>
+        <div class="card">
+          <table>
+            <thead><tr>
+              <th style="width:50px">ID</th><th>Titel</th><th style="width:100px">Status</th>
+              <th style="width:100px">Agent</th><th style="width:120px">Erstellt</th>
+              <th style="width:150px">Ergebnis</th><th style="width:80px"></th>
+            </tr></thead>
+            <tbody id="tasks-table"></tbody>
+          </table>
+          <div class="pagination" id="tasks-pagination"></div>
+        </div>
+      </section>
+
+      <!-- Schedules Section -->
+      <section class="section" id="section-schedules">
+        <div class="section-header">
+          <h1>Schedules</h1>
+          <div class="btn-group">
+            <button class="btn btn-primary" onclick="openScheduleModal()">+ Manuell</button>
+            <button class="btn" onclick="openModal('modal-ai-schedule')">KI-Erstellen</button>
+          </div>
+        </div>
+        <div class="card">
+          <table>
+            <thead><tr>
+              <th>Name</th><th style="width:160px">Zeitplan</th><th style="width:90px">Agent</th>
+              <th style="width:70px">Aktiv</th><th style="width:120px">Letzter Lauf</th>
+              <th style="width:120px">Nächster Lauf</th><th style="width:90px">Ergebnis</th>
+              <th style="width:120px">Aktionen</th>
+            </tr></thead>
+            <tbody id="schedules-table"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Config Section -->
+      <section class="section" id="section-config">
+        <div class="section-header"><h1>Konfiguration</h1></div>
+        <div id="config-container"></div>
+      </section>
+    </main>
   </div>
-</div>
 
-<!-- Tabs -->
-<div class="tabs">
-  <button class="tab-btn active" data-tab="tab-dashboard">Dashboard</button>
-  <button class="tab-btn" data-tab="tab-tasks">Tasks</button>
-  <button class="tab-btn" data-tab="tab-schedules">Schedules</button>
-  <button class="tab-btn" data-tab="tab-config">Config</button>
-</div>
-
-<!-- ── Dashboard Tab ─────────────────────────────────────────────── -->
-<div class="tab-content active" id="tab-dashboard">
-  <div class="stats-row">
-    <div class="stat-card">
-      <div class="label">Aktive Agents</div>
-      <div class="value" id="stat-agents">0</div>
-    </div>
-    <div class="stat-card">
-      <div class="label">Offene Tasks</div>
-      <div class="value" id="stat-tasks">0</div>
-    </div>
-    <div class="stat-card">
-      <div class="label">Token Budget</div>
-      <div class="value" id="stat-budget">--</div>
-    </div>
-    <div class="stat-card">
-      <div class="label">Ollama</div>
-      <div class="value" id="stat-ollama">--</div>
-    </div>
-  </div>
-
-  <div class="card">
-    <h2>Aktive Agents</h2>
-    <div class="agents-list" id="agents-list">
-      <span class="no-agents">Keine aktiven Agents</span>
-    </div>
-  </div>
-
-  <div class="card">
-    <h2>Letzte Tasks</h2>
-    <table>
-      <thead>
-        <tr><th>ID</th><th>Titel</th><th>Status</th><th>Agent</th></tr>
-      </thead>
-      <tbody id="recent-tasks"></tbody>
-    </table>
-  </div>
-</div>
-
-<!-- ── Tasks Tab ─────────────────────────────────────────────────── -->
-<div class="tab-content" id="tab-tasks">
-  <div class="toolbar">
-    <button class="btn btn-primary" onclick="openModal('modal-task')">+ Neuer Task</button>
-  </div>
-  <div class="card">
-    <table>
-      <thead>
-        <tr><th>ID</th><th>Titel</th><th>Status</th><th>Agent</th><th>Erstellt</th><th></th></tr>
-      </thead>
-      <tbody id="tasks-table"></tbody>
-    </table>
-  </div>
-</div>
-
-<!-- ── Schedules Tab ─────────────────────────────────────────────── -->
-<div class="tab-content" id="tab-schedules">
-  <div class="toolbar">
-    <button class="btn btn-primary" onclick="openScheduleModal()">+ Neu</button>
-    <button class="btn" onclick="openModal('modal-ai-schedule')">AI Erstellen</button>
-  </div>
-  <div class="card">
-    <table>
-      <thead>
-        <tr><th>Name</th><th>Schedule</th><th>Agent</th><th>Status</th><th>Letzter Lauf</th><th>Nächster Lauf</th><th>Ergebnis</th><th>Aktionen</th></tr>
-      </thead>
-      <tbody id="schedules-table"></tbody>
-    </table>
-  </div>
-</div>
-
-<!-- ── Config Tab ────────────────────────────────────────────────── -->
-<div class="tab-content" id="tab-config">
-  <div id="config-container"></div>
-</div>
-
-<!-- ── Modal: Neuer Task ─────────────────────────────────────────── -->
-<div class="modal-overlay" id="modal-task" onclick="closeModalOverlay(event)">
-  <div class="modal">
-    <h2>Neuer Task</h2>
-    <div class="form-group">
-      <label>Aufgabe beschreiben</label>
-      <textarea id="task-text" rows="4" placeholder="Was soll erledigt werden?"></textarea>
-    </div>
-    <div class="modal-actions">
-      <button class="btn" onclick="closeModal('modal-task')">Abbrechen</button>
-      <button class="btn btn-primary" onclick="submitTask()">Absenden</button>
-    </div>
-  </div>
-</div>
-
-<!-- ── Modal: Schedule ───────────────────────────────────────────── -->
-<div class="modal-overlay" id="modal-schedule" onclick="closeModalOverlay(event)">
-  <div class="modal">
-    <h2 id="schedule-modal-title">Neuer Schedule</h2>
-    <input type="hidden" id="schedule-edit-id" value="">
-    <div class="form-group">
-      <label>Name</label>
-      <input type="text" id="sched-name" placeholder="z.B. Täglicher Report">
-    </div>
-    <div class="form-group">
-      <label>Schedule (Cron oder natürlich)</label>
-      <input type="text" id="sched-schedule" placeholder="z.B. täglich 09:00">
-    </div>
-    <div class="form-group">
-      <label>Agent-Typ</label>
-      <select id="sched-agent-type">
-        <option value="researcher">researcher</option>
-        <option value="writer">writer</option>
-        <option value="coder">coder</option>
-        <option value="ops">ops</option>
-      </select>
-    </div>
-    <div class="form-group">
-      <label>Aktive Stunden (optional)</label>
-      <input type="text" id="sched-active-hours" placeholder="z.B. 08:00-18:00">
-    </div>
-    <div class="form-group">
-      <label>Prompt</label>
-      <textarea id="sched-prompt" rows="4" placeholder="Was soll der Agent tun?"></textarea>
-    </div>
-    <div class="modal-actions">
-      <button class="btn" onclick="closeModal('modal-schedule')">Abbrechen</button>
-      <button class="btn btn-primary" onclick="saveSchedule()">Speichern</button>
+  <!-- Task Modal -->
+  <div class="modal-overlay" id="modal-task" onclick="closeModalOverlay(event)">
+    <div class="modal">
+      <h2>Neuer Task</h2>
+      <div class="form-group"><label>Beschreibung</label><textarea id="task-text" rows="4" placeholder="Was soll Falki tun?"></textarea></div>
+      <div class="modal-actions">
+        <button class="btn" onclick="closeModal('modal-task')">Abbrechen</button>
+        <button class="btn btn-primary" onclick="submitTask()">Absenden</button>
+      </div>
     </div>
   </div>
-</div>
 
-<!-- ── Modal: AI Schedule ────────────────────────────────────────── -->
-<div class="modal-overlay" id="modal-ai-schedule" onclick="closeModalOverlay(event)">
-  <div class="modal">
-    <h2>Schedule per AI erstellen</h2>
-    <div class="form-group">
-      <label>Beschreibe den gewünschten Schedule</label>
-      <textarea id="ai-sched-desc" rows="4" placeholder="z.B. Jeden Morgen die neuesten KI-News zusammenfassen"></textarea>
-    </div>
-    <div class="modal-actions">
-      <button class="btn" onclick="closeModal('modal-ai-schedule')">Abbrechen</button>
-      <button class="btn btn-primary" onclick="aiCreateSchedule()">AI Erstellen</button>
+  <!-- Schedule Modal -->
+  <div class="modal-overlay" id="modal-schedule" onclick="closeModalOverlay(event)">
+    <div class="modal">
+      <h2 id="schedule-modal-title">Neuer Schedule</h2>
+      <input type="hidden" id="schedule-edit-id">
+      <div class="form-group"><label>Name</label><input type="text" id="sched-name" placeholder="z.B. Morgen-Briefing"></div>
+      <div class="form-group"><label>Zeitplan</label><input type="text" id="sched-schedule" placeholder="z.B. täglich 09:00, alle 30 Minuten"></div>
+      <div class="form-group"><label>Agent-Typ</label><select id="sched-agent-type"><option value="researcher">Researcher</option><option value="writer">Writer</option><option value="coder">Coder</option><option value="ops">Ops</option></select></div>
+      <div class="form-group"><label>Aktive Stunden (optional)</label><input type="text" id="sched-active-hours" placeholder="z.B. 08:00-20:00"></div>
+      <div class="form-group"><label>Prompt</label><textarea id="sched-prompt" rows="4" placeholder="Was soll der Agent tun?"></textarea></div>
+      <div id="schedule-preview" class="schedule-preview"></div>
+      <div class="modal-actions">
+        <button class="btn" onclick="closeModal('modal-schedule')">Abbrechen</button>
+        <button class="btn btn-primary" onclick="saveSchedule()">Speichern</button>
+      </div>
     </div>
   </div>
-</div>
 
-<script src="/static/dashboard.js"></script>
+  <!-- AI Schedule Modal -->
+  <div class="modal-overlay" id="modal-ai-schedule" onclick="closeModalOverlay(event)">
+    <div class="modal">
+      <h2>Schedule per KI erstellen</h2>
+      <div class="form-group"><label>Beschreibe den gewünschten Schedule</label><textarea id="ai-sched-desc" rows="4" placeholder="z.B. Jeden Morgen um 9 die Tech-News zusammenfassen"></textarea></div>
+      <div class="modal-actions">
+        <button class="btn" onclick="closeModal('modal-ai-schedule')">Abbrechen</button>
+        <button class="btn btn-primary" onclick="aiCreateSchedule()">Erstellen</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/dashboard.js"></script>
 </body>
 </html>
