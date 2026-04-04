@@ -11,17 +11,14 @@ def tmp_vault(tmp_path):
     vault.mkdir()
     ki = vault / "KI-Büro"
     ki.mkdir()
-    mgmt = ki / "Management"
-    mgmt.mkdir()
-    kanban = mgmt / "Kanban.md"
+    kanban = ki / "Kanban.md"
     kanban.write_text(
         "# Kanban Board\n\n## Backlog\n\n## In Progress\n\n## Done\n\n## Archiv\n"
     )
-    tasks = ki / "Falkenstein" / "Tasks"
-    tasks.mkdir(parents=True)
-    for sub in ["Recherchen", "Guides", "Cheat-Sheets", "Reports", "Code"]:
-        (ki / "Falkenstein" / "Ergebnisse" / sub).mkdir(parents=True)
+    (ki / "Falkenstein" / "Tasks").mkdir(parents=True)
+    (ki / "Ergebnisse").mkdir(parents=True)
     (ki / "Falkenstein" / "Daily Reports").mkdir(parents=True)
+    (ki / "Inbox.md").write_text("# Inbox\n\n")
     return vault
 
 
@@ -47,7 +44,7 @@ def test_create_task_note(writer, tmp_vault):
 def test_kanban_add_backlog(writer, tmp_vault):
     writer.create_task_note(title="Test Task", typ="code", agent="coder")
     writer.kanban_move("Test Task", "backlog")
-    kanban = (tmp_vault / "KI-Büro" / "Management" / "Kanban.md").read_text()
+    kanban = (tmp_vault / "KI-Büro" / "Kanban.md").read_text()
     assert "Test Task" in kanban
     backlog_pos = kanban.index("## Backlog")
     in_progress_pos = kanban.index("## In Progress")
@@ -59,7 +56,7 @@ def test_kanban_move_to_in_progress(writer, tmp_vault):
     writer.create_task_note(title="Moving Task", typ="code", agent="coder")
     writer.kanban_move("Moving Task", "backlog")
     writer.kanban_move("Moving Task", "in_progress")
-    kanban = (tmp_vault / "KI-Büro" / "Management" / "Kanban.md").read_text()
+    kanban = (tmp_vault / "KI-Büro" / "Kanban.md").read_text()
     in_progress_pos = kanban.index("## In Progress")
     done_pos = kanban.index("## Done")
     task_pos = kanban.index("Moving Task")
@@ -70,7 +67,7 @@ def test_kanban_move_to_done(writer, tmp_vault):
     writer.create_task_note(title="Done Task", typ="recherche", agent="researcher")
     writer.kanban_move("Done Task", "backlog")
     writer.kanban_move("Done Task", "done")
-    kanban = (tmp_vault / "KI-Büro" / "Management" / "Kanban.md").read_text()
+    kanban = (tmp_vault / "KI-Büro" / "Kanban.md").read_text()
     assert "- [x]" in kanban
 
 
@@ -80,9 +77,11 @@ def test_write_result_recherche(writer, tmp_vault):
         typ="recherche",
         content="# Docker vs Podman\n\nDocker ist...",
     )
-    assert "Recherchen" in str(path)
+    assert "Ergebnisse" in str(path)
     assert path.exists()
-    assert "Docker ist" in path.read_text()
+    content = path.read_text()
+    assert "typ: recherche" in content
+    assert "Docker ist" in content
 
 
 def test_write_result_guide(writer, tmp_vault):
@@ -91,25 +90,36 @@ def test_write_result_guide(writer, tmp_vault):
         typ="guide",
         content="# Git Rebase\n\nSchritt 1...",
     )
-    assert "Guides" in str(path)
+    assert "Ergebnisse" in str(path)
+    content = path.read_text()
+    assert "typ: guide" in content
 
 
-def test_write_result_cheat_sheet(writer, tmp_vault):
+def test_write_result_with_project(writer, tmp_vault):
+    proj = tmp_vault / "KI-Büro" / "Projekte" / "website"
+    proj.mkdir(parents=True)
     path = writer.write_result(
-        title="Docker Commands",
-        typ="cheat-sheet",
-        content="# Docker Cheat Sheet",
+        title="SEO Analyse",
+        typ="recherche",
+        content="# SEO\n\nErgebnis...",
+        project="website",
     )
-    assert "Cheat-Sheets" in str(path)
+    assert "Projekte/website/Ergebnisse" in str(path)
+    assert path.exists()
+    content = path.read_text()
+    assert "typ: recherche" in content
+    assert "Ergebnis..." in content
 
 
-def test_write_result_code(writer, tmp_vault):
+def test_write_result_without_project(writer, tmp_vault):
     path = writer.write_result(
-        title="Backup Script",
-        typ="code",
-        content="# Backup Script\n\n```bash\nrsync...\n```",
+        title="Allgemeine Recherche",
+        typ="report",
+        content="# Report\n\nInhalt...",
     )
-    assert "Code" in str(path)
+    assert "KI-Büro/Ergebnisse" in str(path)
+    assert "Projekte" not in str(path)
+    assert path.exists()
 
 
 def test_update_task_note_status(writer, tmp_vault):
@@ -119,9 +129,10 @@ def test_update_task_note_status(writer, tmp_vault):
     assert "status: in_progress" in content
 
 
-def test_result_type_mapping(writer):
-    assert writer.map_result_type("recherche") == "Recherchen"
-    assert writer.map_result_type("guide") == "Guides"
-    assert writer.map_result_type("cheat-sheet") == "Cheat-Sheets"
-    assert writer.map_result_type("code") == "Code"
-    assert writer.map_result_type("report") == "Reports"
+def test_remove_from_inbox(writer, tmp_vault):
+    inbox = tmp_vault / "KI-Büro" / "Inbox.md"
+    inbox.write_text("# Inbox\n\n- [ ] Deploy website\n- [ ] Fix bug\n")
+    writer.remove_from_inbox("Deploy website")
+    content = inbox.read_text()
+    assert "Deploy website" not in content
+    assert "Fix bug" in content
