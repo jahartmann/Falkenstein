@@ -210,15 +210,12 @@ class ScheduledTask:
         return start <= now <= end
 
 
-VAULT_PREFIX = "KI-Büro"
-
-
 class Scheduler:
     """Loads scheduled tasks from Obsidian and runs them on time."""
 
     def __init__(self, vault_path: Path):
         self.vault = vault_path.resolve()
-        self.schedules_dir = self.vault / VAULT_PREFIX / "Management" / "Schedules"
+        self.schedules_dir = self.vault / "KI-Büro" / "Schedules"
         self._last_run_path = self.schedules_dir / ".last_run.json"
         self.tasks: dict[str, ScheduledTask] = {}
         self._on_task_due = None  # async callback: (ScheduledTask) -> None

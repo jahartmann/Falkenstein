@@ -103,7 +103,7 @@ from backend.scheduler import ScheduledTask, Scheduler
 @pytest.fixture
 def tmp_schedules(tmp_path):
     """Create a Schedules directory with test task files."""
-    sched_dir = tmp_path / "KI-Büro" / "Management" / "Schedules"
+    sched_dir = tmp_path / "KI-Büro" / "Schedules"
     sched_dir.mkdir(parents=True)
     (sched_dir / "test-task.md").write_text(
         "---\n"
@@ -129,7 +129,7 @@ def tmp_schedules(tmp_path):
 
 
 def test_load_task_from_file(tmp_schedules):
-    sched_dir = tmp_schedules / "KI-Büro" / "Management" / "Schedules"
+    sched_dir = tmp_schedules / "KI-Büro" / "Schedules"
     task = ScheduledTask.from_file(sched_dir / "test-task.md")
     assert task.name == "Test Task"
     assert task.agent == "researcher"
@@ -140,7 +140,7 @@ def test_load_task_from_file(tmp_schedules):
 
 
 def test_load_inactive_task(tmp_schedules):
-    sched_dir = tmp_schedules / "KI-Büro" / "Management" / "Schedules"
+    sched_dir = tmp_schedules / "KI-Büro" / "Schedules"
     task = ScheduledTask.from_file(sched_dir / "inactive.md")
     assert task.active is False
 
