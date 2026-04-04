@@ -1,4 +1,11 @@
 import { PlayerEntity } from './player.js';
+import { CameraManager } from './camera.js';
+import { AgentManager } from './agents.js';
+import { BubbleManager } from './bubbles.js';
+import { PanelManager } from './panels.js';
+import { ObjectManager } from './objects.js';
+import { HUD } from './hud.js';
+import { OfficeWS } from './ws.js';
 
 const TILESET_MAP = {
   'Room_Builder_Office_48x48': 'tiles_room',
@@ -125,6 +132,7 @@ export class OfficeScene extends Phaser.Scene {
   constructor() { super('Office'); }
 
   create() {
+    // Tilemap
     this.tilemap = new TilemapManager(this);
     this.tilemap.create();
 
@@ -132,16 +140,58 @@ export class OfficeScene extends Phaser.Scene {
     this.physics.world.setBounds(0, 0, bounds.width, bounds.height);
     this.cameras.main.setBounds(0, 0, bounds.width, bounds.height);
     this.cameras.main.setZoom(1);
-    this.cameras.main.centerOn(bounds.width / 2, bounds.height / 2);
 
+    // Player
     const spawnRoom = this.tilemap.rooms.find(r => r.name === 'Gemeinschaftsraum') || this.tilemap.rooms[0];
     const spawnX = spawnRoom ? spawnRoom.centerX : 30;
     const spawnY = spawnRoom ? spawnRoom.centerY : 24;
     this.player = new PlayerEntity(this, this.tilemap);
     this.player.create(spawnX, spawnY);
+
+    // Camera (hybrid zoom)
+    this.cameraManager = new CameraManager(this, this.player);
+    this.cameraManager.create();
+
+    // Agent manager
+    this.agentManager = new AgentManager(this, this.tilemap);
+    this.agentManager.create();
+    this.agentManager.spawnAgent('main-agent', 'ops', 'MainAgent — Koordination');
+
+    // Speech bubbles
+    this.bubbleManager = new BubbleManager(this, this.agentManager);
+    this.bubbleManager.create();
+
+    // Popup panels
+    this.panelManager = new PanelManager();
+    this.panelManager.create();
+
+    // Interactive objects
+    this.objectManager = new ObjectManager(this, this.tilemap, this.panelManager, this.agentManager);
+    this.objectManager.create();
+
+    // HUD + Minimap
+    this.hud = new HUD(this, this.tilemap, this.agentManager);
+    this.hud.create();
+
+    // WebSocket
+    this.officeWS = new OfficeWS(this.agentManager, this.bubbleManager, this.hud);
+    this.officeWS.connect();
   }
 
   update(time, delta) {
-    if (this.player) this.player.update();
+    if (this.player) {
+      this.player.update();
+      const tile = this.player.getTilePos();
+      if (this.objectManager) this.objectManager.update(tile.x, tile.y);
+      if (this.player.justInteracted()) {
+        if (this.panelManager.isOpen()) this.panelManager.close();
+        else if (this.objectManager) this.objectManager.interact();
+      }
+    }
+    if (this.bubbleManager) this.bubbleManager.update();
+    if (this.hud && this.player) {
+      const pos = this.player.getWorldPos();
+      this.hud.update(pos.x, pos.y);
+    }
   }
 }
