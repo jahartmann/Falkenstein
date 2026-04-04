@@ -24,6 +24,7 @@ def mock_db():
     db.create_task = AsyncMock(return_value=1)
     db.update_task_status = AsyncMock()
     db.update_task_result = AsyncMock()
+    db.update_schedule_result = AsyncMock()
     return db
 
 
@@ -208,8 +209,8 @@ def _make_scheduled_task(name="Heartbeat", schedule="stündlich", agent_type="op
 
 
 @pytest.mark.asyncio
-async def test_handle_scheduled_heartbeat_ok(agent, mock_telegram):
-    """HEARTBEAT_OK result suppresses Telegram and Obsidian write."""
+async def test_handle_scheduled_heartbeat_ok(agent, mock_telegram, mock_db):
+    """HEARTBEAT_OK result suppresses Telegram and Obsidian write, but creates DB task."""
     task = _make_scheduled_task()
     with patch("backend.main_agent.SubAgent") as MockSub:
         mock_sub = AsyncMock()
@@ -219,10 +220,15 @@ async def test_handle_scheduled_heartbeat_ok(agent, mock_telegram):
         await agent.handle_scheduled(task)
     mock_telegram.send_message.assert_not_called()
     agent.obsidian_writer.write_result.assert_not_called()
+    # DB task was created and completed
+    mock_db.create_task.assert_called_once()
+    mock_db.update_task_result.assert_called_once()
+    # Schedule result updated to "ok"
+    mock_db.update_schedule_result.assert_called_once_with(1, "ok")
 
 
 @pytest.mark.asyncio
-async def test_handle_scheduled_with_report(agent, mock_telegram, mock_obsidian_writer):
+async def test_handle_scheduled_with_report(agent, mock_telegram, mock_obsidian_writer, mock_db):
     """Normal result writes to Obsidian and sends Telegram summary."""
     task = _make_scheduled_task(name="Daily Check", prompt="Prüfe alle offenen Tasks.")
     with patch("backend.main_agent.SubAgent") as MockSub:
@@ -238,6 +244,51 @@ async def test_handle_scheduled_with_report(agent, mock_telegram, mock_obsidian_
     sent_text = mock_telegram.send_message.call_args[0][0]
     assert "Daily Check" in sent_text
     assert "Systemstatus" in sent_text
+    # DB task was created
+    mock_db.create_task.assert_called_once()
+    # Schedule result updated to "done"
+    mock_db.update_schedule_result.assert_called_once_with(1, "done")
+
+
+@pytest.mark.asyncio
+async def test_handle_scheduled_error(agent, mock_telegram, mock_db):
+    """Scheduled task error updates DB and sends WS event."""
+    task = _make_scheduled_task(name="Failing Task")
+    ws_events = []
+    agent.ws_callback = AsyncMock(side_effect=lambda msg: ws_events.append(msg))
+    with patch("backend.main_agent.SubAgent") as MockSub:
+        mock_sub = AsyncMock()
+        mock_sub.run = AsyncMock(side_effect=RuntimeError("LLM timeout"))
+        mock_sub.agent_id = "sub_ops_fail"
+        MockSub.return_value = mock_sub
+        await agent.handle_scheduled(task)
+    # DB task created and error recorded
+    mock_db.create_task.assert_called_once()
+    mock_db.update_task_result.assert_called_once()
+    assert "ERROR" in mock_db.update_task_result.call_args[0][1]
+    mock_db.update_schedule_result.assert_called_once_with(1, "error", "LLM timeout")
+    # WS events: spawned + error
+    assert len(ws_events) == 2
+    assert ws_events[0]["type"] == "agent_spawned"
+    assert ws_events[1]["type"] == "agent_error"
+
+
+@pytest.mark.asyncio
+async def test_handle_scheduled_ws_events(agent, mock_db):
+    """Scheduled task sends agent_spawned and agent_done WS events."""
+    task = _make_scheduled_task(name="WS Test")
+    ws_events = []
+    agent.ws_callback = AsyncMock(side_effect=lambda msg: ws_events.append(msg))
+    with patch("backend.main_agent.SubAgent") as MockSub:
+        mock_sub = AsyncMock()
+        mock_sub.run = AsyncMock(return_value="HEARTBEAT_OK")
+        mock_sub.agent_id = "sub_ops_ws"
+        MockSub.return_value = mock_sub
+        await agent.handle_scheduled(task)
+    assert len(ws_events) == 2
+    assert ws_events[0]["type"] == "agent_spawned"
+    assert ws_events[0]["task"] == "WS Test"
+    assert ws_events[1]["type"] == "agent_done"
 
 
 # ── /schedule command tests ──────────────────────────────────

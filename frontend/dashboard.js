@@ -157,13 +157,19 @@ async function loadSchedules() {
       tbody.innerHTML = tasks.map(s => {
         const active = s.active === 1 || s.active === true;
         const statusBadge = active ? badge('active') : badge('inactive');
-        const lastRun = s.last_run || '--';
+        const lastRun = s.last_run ? new Date(s.last_run).toLocaleString('de') : 'Nie';
+        const nextRun = s.next_run ? new Date(s.next_run).toLocaleString('de') : '--';
+        const resultBadge = s.last_status
+          ? `<span class="badge ${s.last_status === 'error' ? 'badge-inactive' : 'badge-active'}">${esc(s.last_status)}</span>`
+          : '<span class="badge" style="background:rgba(255,255,255,0.05);color:var(--text-muted)">--</span>';
         return `<tr>
           <td>${esc(s.name)}</td>
           <td>${esc(s.schedule || '')}</td>
           <td>${esc(s.agent_type || '')}</td>
           <td>${statusBadge}</td>
           <td>${esc(lastRun)}</td>
+          <td>${esc(nextRun)}</td>
+          <td>${resultBadge}</td>
           <td>
             <div class="btn-group">
               <button class="btn btn-sm" onclick="toggleSchedule(${s.id})">${active ? 'Pause' : 'Aktiv'}</button>
@@ -175,7 +181,7 @@ async function loadSchedules() {
         </tr>`;
       }).join('');
     } else {
-      tbody.innerHTML = '<tr><td colspan="6" style="color:var(--text-muted)">Keine Schedules</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="8" style="color:var(--text-muted)">Keine Schedules</td></tr>';
     }
   } catch (e) {
     console.error('Schedules load error:', e);
@@ -252,6 +258,7 @@ async function runSchedule(id) {
   try {
     const res = await api('/schedules/' + id + '/run', { method: 'POST' });
     if (res.triggered) {
+      loadSchedules();
       loadDashboard();
     } else if (res.error) {
       alert(res.error);
@@ -438,6 +445,11 @@ function connectWS() {
         const tasksTab = document.getElementById('tab-tasks');
         if (tasksTab.classList.contains('active')) {
           loadTasks();
+        }
+        // Also refresh schedules if on schedules tab
+        const schedsTab = document.getElementById('tab-schedules');
+        if (schedsTab.classList.contains('active')) {
+          loadSchedules();
         }
       }
     } catch (_) {

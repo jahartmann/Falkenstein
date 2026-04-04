@@ -244,7 +244,10 @@ class Scheduler:
                 "agent_type": task.get("agent_type", "researcher"),
                 "active": bool(task.get("active")),
                 "last_run": task["_last_run"].isoformat() if task.get("_last_run") else None,
+                "last_status": task.get("last_status"),
+                "last_error": task.get("last_error"),
                 "next_run": task["_next_run"].isoformat() if task.get("_next_run") else None,
+                "prompt_preview": task["prompt"][:100] if task.get("prompt") else "",
                 "active_hours": (
                     f"{ah[0]:02d}:{ah[1]:02d}-{ah[2]:02d}:{ah[3]:02d}" if ah else None
                 ),

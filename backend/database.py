@@ -105,6 +105,8 @@ class Database:
                 active_hours  TEXT,
                 light_context INTEGER DEFAULT 0,
                 last_run      TEXT,
+                last_status   TEXT,
+                last_error    TEXT,
                 created_at    TEXT DEFAULT (datetime('now')),
                 updated_at    TEXT DEFAULT (datetime('now'))
             );
@@ -421,6 +423,13 @@ class Database:
         await self._conn.commit()
         s = await self.get_schedule(schedule_id)
         return bool(s["active"])
+
+    async def update_schedule_result(self, schedule_id: int, status: str, error: str | None = None) -> None:
+        await self._conn.execute(
+            "UPDATE schedules SET last_status = ?, last_error = ?, updated_at = datetime('now') WHERE id = ?",
+            (status, error, schedule_id),
+        )
+        await self._conn.commit()
 
     async def mark_schedule_run(self, schedule_id: int) -> None:
         await self._conn.execute(

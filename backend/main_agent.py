@@ -675,45 +675,71 @@ class MainAgent:
             if self.telegram:
                 await self.telegram.send_message(error_msg[:4000], chat_id=chat_id or None)
 
-    async def handle_scheduled(self, task: dict):
-        """Run a scheduled task through a SubAgent. Suppress Telegram/Obsidian for HEARTBEAT_OK."""
-        task_name = task.get("name", "unknown")
-        sub = SubAgent(
-            agent_type=task.get("agent_type", "researcher"),
-            task_description=task.get("prompt", ""),
-            llm=self._get_llm_for("scheduled"),
-            tools=self.tools,
-            db=self.db,
-        )
+    async def handle_scheduled(self, task: dict) -> None:
+        """Run a scheduled task through a SubAgent with full visibility."""
+        agent_type = task.get("agent_type", "researcher")
+        prompt = task.get("prompt", "")
+        name = task.get("name", "scheduled")
+        schedule_id = task.get("id")
+
+        # 1. Create DB task
+        db_task = TaskData(title=f"[Schedule] {name}", description=prompt, status=TaskStatus.OPEN)
+        task_id = await self.db.create_task(db_task)
+        await self.db.update_task_status(task_id, TaskStatus.IN_PROGRESS)
+
+        # 2. Register in active_agents
+        llm = self._get_llm_for("scheduled")
+        sub = SubAgent(agent_type=agent_type, task_description=prompt, llm=llm, tools=self.tools, db=self.db)
+        self.active_agents[sub.agent_id] = {"type": agent_type, "task": name, "task_id": task_id}
+
+        # 3. Send WS event
+        if self.ws_callback:
+            await self.ws_callback({"type": "agent_spawned", "agent_id": sub.agent_id, "agent_type": agent_type, "task": name})
+
         try:
             result = await sub.run()
         except Exception as e:
-            if self.telegram:
-                await self.telegram.send_message(
-                    f"❌ Scheduled Task Fehler: {task_name}\n{str(e)[:300]}"
-                )
+            await self.db.update_task_status(task_id, TaskStatus.DONE)
+            await self.db.update_task_result(task_id, f"ERROR: {e}")
+            if schedule_id:
+                await self.db.update_schedule_result(schedule_id, "error", str(e))
+            self.active_agents.pop(sub.agent_id, None)
+            if self.ws_callback:
+                await self.ws_callback({"type": "agent_error", "agent_id": sub.agent_id, "error": str(e)})
+            return
+        finally:
+            self.active_agents.pop(sub.agent_id, None)
+
+        # 4. Update DB task
+        await self.db.update_task_status(task_id, TaskStatus.DONE)
+        await self.db.update_task_result(task_id, (result or "")[:5000])
+
+        # 5. Update schedule result status
+        if schedule_id:
+            if result and result.strip().startswith("HEARTBEAT_OK"):
+                await self.db.update_schedule_result(schedule_id, "ok")
+            else:
+                await self.db.update_schedule_result(schedule_id, "done")
+
+        # 6. Send WS done event
+        if self.ws_callback:
+            await self.ws_callback({"type": "agent_done", "agent_id": sub.agent_id, "task": name})
+
+        # Skip output for heartbeats
+        if not result or result.strip().startswith("HEARTBEAT_OK"):
             return
 
-        if result.startswith("HEARTBEAT_OK"):
-            # Suppress Telegram and Obsidian — silent success
-            return
-
-        # Write result to Obsidian if enabled
+        # 7. Write to Obsidian if enabled
         if self._obsidian_enabled():
             try:
-                await asyncio.to_thread(
-                    self.obsidian_writer.write_result,
-                    title=task_name, typ="report", content=result,
-                )
+                await asyncio.to_thread(self.obsidian_writer.write_result, title=name, typ="Recherche", content=result)
             except Exception as e:
-                print(f"Obsidian write failed: {e}")
+                print(f"Obsidian write failed for scheduled '{name}': {e}")
 
-        # Send Telegram summary
+        # 8. Send result to Telegram
         if self.telegram:
-            summary = result[:500] if len(result) <= 500 else result[:497] + "..."
-            await self.telegram.send_message(
-                f"🕐 Scheduled: {task_name}\n\n{summary}"
-            )
+            summary = result[:500] + ("..." if len(result) > 500 else "")
+            await self.telegram.send_message(f"Schedule '{name}':\n{summary}")
 
     def get_status(self) -> dict:
         return {
