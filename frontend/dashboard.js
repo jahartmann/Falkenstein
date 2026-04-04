@@ -84,7 +84,7 @@ async function loadDashboard() {
       agentsList.innerHTML = data.active_agents.map(a => {
         const task = a.task || a.name || 'agent';
         const type = a.type || '';
-        return `<div class="agent-chip"><div class="agent-pulse"></div><span>${esc(task)}</span><span class="agent-type">${esc(type)}</span></div>`;
+        return `<div class="agent-chip" data-agent-id="${esc(a.agent_id || '')}"><div class="agent-pulse"></div><span>${esc(task)}</span><span class="agent-type">${esc(type)}</span><span class="agent-tool-status"></span></div>`;
       }).join('');
     } else {
       agentsList.innerHTML = '<span class="text-muted">Keine aktiven Agents</span>';
@@ -95,7 +95,7 @@ async function loadDashboard() {
 
 // Activity Feed
 function addActivity(type, text) {
-  const colors = { agent_spawned: 'var(--blue)', agent_done: 'var(--green)', agent_error: 'var(--red)', task_created: 'var(--cyan)', schedule_fired: 'var(--purple)' };
+  const colors = { agent_spawned: 'var(--blue)', agent_done: 'var(--green)', agent_error: 'var(--red)', task_created: 'var(--cyan)', schedule_fired: 'var(--purple)', agent_progress: 'var(--amber)' };
   activityLog.unshift({ type, text, color: colors[type] || 'var(--text-muted)', time: new Date() });
   if (activityLog.length > 20) activityLog.length = 20;
   if (document.getElementById('section-dashboard').classList.contains('active')) renderActivity();
@@ -401,6 +401,9 @@ function connectWS() {
         schedule_fired: 'Schedule ausgeführt: ' + (msg.name || ''),
       };
       if (labels[type]) addActivity(type, labels[type]);
+      if (type === 'agent_progress') {
+        addActivity('agent_progress', (msg.label || msg.tool) + ' (' + (msg.agent_id || '').slice(-8) + ')');
+      }
       if (['agent_spawned','agent_done','agent_error','task_created'].includes(type)) {
         loadDashboard();
         if (document.getElementById('section-tasks').classList.contains('active')) loadTasks();

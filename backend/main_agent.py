@@ -128,7 +128,25 @@ class MainAgent:
                 text = text[text.index("{"):text.rindex("}") + 1]
             return json.loads(text)
         except (json.JSONDecodeError, ValueError):
-            return {"type": "quick_reply", "answer": response}
+            # Retry once with JSON format hint
+            try:
+                response2 = await llm.chat(
+                    system_prompt=system,
+                    messages=[
+                        {"role": "user", "content": message},
+                        {"role": "assistant", "content": response},
+                        {"role": "user", "content": "Antworte NUR mit validem JSON. Kein Text davor oder danach."},
+                    ],
+                    temperature=0.0,
+                )
+                text2 = response2.strip()
+                if "{" in text2:
+                    text2 = text2[text2.index("{"):text2.rindex("}") + 1]
+                return json.loads(text2)
+            except Exception:
+                # Final fallback: treat as quick_reply with cleaned response
+                clean = response[:500] if len(response) > 500 else response
+                return {"type": "quick_reply", "answer": clean}
 
     # ── Telegram /commands ──────────────────────────────────────────
     _COMMANDS: dict[str, str] = {
@@ -490,6 +508,23 @@ class MainAgent:
             return self.llm_router.get_client(task_type)
         return self.llm
 
+    def _make_progress_callback(self, agent_id: str, title: str, chat_id: str = ""):
+        _tool_labels = {
+            "web_research": "Suche im Web", "shell_runner": "Führe Befehl aus",
+            "system_shell": "Systembefehl", "code_executor": "Teste Code",
+            "obsidian_manager": "Lese/Schreibe Obsidian", "vision": "Analysiere Bild",
+            "ollama_manager": "Ollama-Verwaltung", "self_config": "Konfiguration",
+            "cli_bridge": "Premium LLM", "file_manager": "Dateiverwaltung",
+        }
+        async def callback(tool_name: str, success: bool):
+            label = _tool_labels.get(tool_name, tool_name)
+            if self.ws_callback:
+                await self.ws_callback({
+                    "type": "agent_progress", "agent_id": agent_id,
+                    "tool": tool_name, "label": label, "success": success,
+                })
+        return callback
+
     def _build_system_context(self) -> str:
         """Build system knowledge block so SubAgents know about the environment."""
         parts = []
@@ -538,6 +573,7 @@ class MainAgent:
                 tools=self.tools,
                 db=self.db,
             )
+            sub._progress_callback = self._make_progress_callback(sub.agent_id, title, chat_id)
             self.active_agents[sub.agent_id] = {
                 "type": agent_type, "task": title,
                 "task_id": task_id, "sub_agent": sub,
@@ -631,6 +667,7 @@ class MainAgent:
                 tools=self.tools,
                 db=self.db,
             )
+            sub._progress_callback = self._make_progress_callback(sub.agent_id, title, chat_id)
             self.active_agents[sub.agent_id] = {
                 "type": agent_type, "task": title,
                 "task_id": task_id, "sub_agent": sub,
@@ -710,6 +747,7 @@ class MainAgent:
         # 2. Register in active_agents
         llm = self._get_llm_for("scheduled")
         sub = SubAgent(agent_type=agent_type, task_description=prompt, llm=llm, tools=self.tools, db=self.db)
+        sub._progress_callback = self._make_progress_callback(sub.agent_id, name, "")
         self.active_agents[sub.agent_id] = {"type": agent_type, "task": name, "task_id": task_id}
 
         # 3. Send WS event

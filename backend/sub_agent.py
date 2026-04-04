@@ -2,38 +2,54 @@ import uuid
 from backend.tools.base import ToolRegistry, ToolResult
 
 SUB_AGENT_TOOLS: dict[str, list[str]] = {
-    "coder": ["shell_runner", "code_executor", "cli_bridge"],
-    "researcher": ["web_research", "vision", "cli_bridge"],
+    "coder": ["shell_runner", "system_shell", "code_executor", "cli_bridge", "self_config"],
+    "researcher": ["web_research", "vision", "cli_bridge", "system_shell"],
     "writer": ["obsidian_manager", "cli_bridge"],
-    "ops": ["shell_runner", "cli_bridge"],
+    "ops": ["shell_runner", "system_shell", "ollama_manager", "self_config", "cli_bridge", "obsidian_manager"],
 }
 
 _SYSTEM_PROMPTS: dict[str, str] = {
     "coder": (
-        "Du bist ein Coding-Agent. Du schreibst, debuggst und optimierst Code. "
-        "Nutze die verfügbaren Tools um die Aufgabe zu erledigen. "
-        "Antworte am Ende mit einer klaren Zusammenfassung des Ergebnisses auf Deutsch."
+        "Du bist ein Coding-Agent im Falkenstein-System. "
+        "Du schreibst, debuggst und optimierst Code. "
+        "Nutze deine Tools aktiv: shell_runner/system_shell für Befehle, code_executor zum Testen, "
+        "self_config um Konfigurationsdateien zu lesen/schreiben. "
+        "WICHTIG: Lies zuerst die relevanten Dateien bevor du Änderungen machst. "
+        "Wenn du keinen Zugriff hast, sag das klar. Erfinde nichts. "
+        "Antworte kurz und präzise auf Deutsch — nur was du gemacht hast."
     ),
     "researcher": (
-        "Du bist ein Research-Agent. Du recherchierst Themen gründlich im Web. "
-        "Nutze die verfügbaren Tools um Informationen zu sammeln. "
-        "Antworte am Ende mit einem strukturierten Ergebnis auf Deutsch."
+        "Du bist ein Research-Agent im Falkenstein-System. "
+        "Du recherchierst Themen gründlich im Web und analysierst Informationen. "
+        "Nutze web_research für Suche und Scraping, system_shell für lokale Prüfungen. "
+        "Strukturiere deine Ergebnisse klar mit Überschriften und Bulletpoints. "
+        "Antworte auf Deutsch."
     ),
     "writer": (
-        "Du bist ein Writer-Agent. Du erstellst Texte, Dokumentation und Reports. "
-        "Nutze die verfügbaren Tools um Inhalte zu erstellen. "
-        "Antworte am Ende mit dem fertigen Text auf Deutsch."
+        "Du bist ein Writer-Agent im Falkenstein-System. "
+        "Du erstellst Texte, Dokumentation und strukturierte Inhalte. "
+        "Nutze obsidian_manager um Dateien in der Obsidian-Vault zu lesen und schreiben. "
+        "Antworte mit dem fertigen Text auf Deutsch."
     ),
     "ops": (
-        "Du bist ein Ops-Agent. Du verwaltest Systeme, führst Befehle aus und löst Infrastruktur-Probleme. "
-        "Nutze die verfügbaren Tools um die Aufgabe zu erledigen. "
-        "Antworte am Ende mit einer klaren Zusammenfassung auf Deutsch."
+        "Du bist ein Ops-Agent im Falkenstein-System. "
+        "Du verwaltest Systeme, konfigurierst Dienste und löst Probleme. "
+        "Nutze deine Tools aktiv:\n"
+        "- system_shell: Befehle überall auf dem System ausführen\n"
+        "- shell_runner: Befehle im Workspace\n"
+        "- ollama_manager: Ollama-Modelle verwalten (list, pull, remove, status)\n"
+        "- self_config: .env, SOUL.md und andere Konfigdateien lesen/schreiben\n\n"
+        "WICHTIG: Führe Aufgaben direkt aus. Lies zuerst den aktuellen Zustand, "
+        "dann ändere was nötig ist. Schreibe KEINEN Guide oder Report — "
+        "tu es einfach. Wenn du etwas nicht kannst, sag das klar statt einen "
+        "Leitfaden zu schreiben. Antworte kurz was du gemacht hast."
     ),
 }
 
 
 class SubAgent:
-    def __init__(self, agent_type: str, task_description: str, llm, tools: ToolRegistry, db, max_iterations: int = 10):
+    def __init__(self, agent_type: str, task_description: str, llm, tools: ToolRegistry, db,
+                 max_iterations: int = 10, progress_callback=None):
         self.agent_type = agent_type
         self.agent_id = f"sub_{agent_type}_{uuid.uuid4().hex[:8]}"
         self.task_description = task_description
@@ -43,6 +59,7 @@ class SubAgent:
         self.max_iterations = max_iterations
         self.done = False
         self._messages: list[dict] = []
+        self._progress_callback = progress_callback
 
         allowed = SUB_AGENT_TOOLS.get(agent_type, [])
         self._tool_schemas = []
@@ -85,14 +102,23 @@ class SubAgent:
                 func = tc.get("function", {})
                 tool_name = func.get("name", "")
                 args = func.get("arguments", {})
+                tool_call_id = tc.get("id", tool_name)
                 tool = self._tool_map.get(tool_name)
                 if tool:
                     result = await tool.execute(args)
                     await self.db.log_tool_use(self.agent_id, tool_name, args, result.output, result.success)
-                    self._messages.append({"role": "tool", "content": result.output[:5000]})
+                    if self._progress_callback:
+                        await self._progress_callback(tool_name, result.success)
+                    output = result.output
+                    if len(output) > 5000:
+                        output = output[:4900] + "\n\n[... AUSGABE GEKÜRZT, weitere Inhalte abgeschnitten ...]"
+                    self._messages.append({"role": "tool", "content": output, "tool_call_id": tool_call_id})
                 else:
-                    self._messages.append({"role": "tool", "content": f"Tool '{tool_name}' nicht verfügbar."})
+                    self._messages.append({"role": "tool", "content": f"Tool '{tool_name}' nicht verfügbar.", "tool_call_id": tool_call_id})
 
         self.done = True
-        last_content = self._messages[-1].get("content", "") if self._messages else ""
-        return last_content or "Max Iterationen erreicht."
+        # Find last assistant message (not tool result) for a coherent summary
+        for msg in reversed(self._messages):
+            if msg.get("role") == "assistant" and msg.get("content"):
+                return msg["content"]
+        return "Max Iterationen erreicht — kein zusammenfassendes Ergebnis."
