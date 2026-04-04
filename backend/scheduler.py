@@ -117,6 +117,19 @@ def next_run(schedule: dict, after: datetime.datetime) -> datetime.datetime:
     return after + datetime.timedelta(hours=1)
 
 
+def get_next_runs(schedule: dict, count: int = 3, after: datetime.datetime | None = None) -> list[datetime.datetime]:
+    """Compute the next N run times for a schedule."""
+    if after is None:
+        after = datetime.datetime.now()
+    runs = []
+    current = after
+    for _ in range(count):
+        nxt = next_run(schedule, current)
+        runs.append(nxt)
+        current = nxt
+    return runs
+
+
 def _parse_active_hours(s) -> tuple[int, int, int, int] | None:
     """Parse 'HH:MM-HH:MM' into (start_h, start_m, end_h, end_m)."""
     if not s or not isinstance(s, str):
@@ -155,6 +168,13 @@ class Scheduler:
         self.tasks = []
         for row in rows:
             parsed = parse_schedule(row["schedule"])
+            # Warn and skip cron schedules (not supported)
+            if parsed.get("type") == "cron":
+                await self._db.update_schedule_result(
+                    row["id"], "error",
+                    "Cron-Syntax nicht unterstützt. Verwende deutsche Zeitangaben (z.B. 'täglich 09:00')."
+                )
+                continue
             last_run = (
                 datetime.datetime.fromisoformat(row["last_run"])
                 if row.get("last_run")
@@ -176,7 +196,15 @@ class Scheduler:
             self.tasks.append(task)
 
     async def reload_tasks(self) -> None:
+        """Reload schedules from DB, preserving _next_run for unchanged tasks."""
+        old_runs = {t["id"]: t["_next_run"] for t in self.tasks}
+        old_last_run = {t["id"]: t.get("_last_run") for t in self.tasks}
         await self.load_tasks()
+        # Restore _next_run for schedules that haven't changed
+        for t in self.tasks:
+            tid = t["id"]
+            if tid in old_runs and old_last_run.get(tid) == t.get("_last_run"):
+                t["_next_run"] = old_runs[tid]
 
     # ── due check ───────────────────────────────────────────────
 
@@ -247,7 +275,7 @@ class Scheduler:
                 "last_status": task.get("last_status"),
                 "last_error": task.get("last_error"),
                 "next_run": task["_next_run"].isoformat() if task.get("_next_run") else None,
-                "prompt_preview": task["prompt"][:100] if task.get("prompt") else "",
+                "prompt": task.get("prompt", ""),
                 "active_hours": (
                     f"{ah[0]:02d}:{ah[1]:02d}-{ah[2]:02d}:{ah[3]:02d}" if ah else None
                 ),
