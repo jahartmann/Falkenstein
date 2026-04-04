@@ -1,10 +1,12 @@
 import asyncio
+import time as _time
 from pathlib import Path
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from backend.config import settings
+from backend.admin_api import router as admin_router
 from backend.database import Database
 from backend.llm_client import LLMClient
 from backend.ws_manager import WSManager
@@ -122,6 +124,9 @@ async def lifespan(app: FastAPI):
         watcher_task = asyncio.create_task(watcher.start())
         print("Obsidian watcher active")
 
+    from backend import admin_api
+    admin_api.init(start_time=_time.time())
+
     print(f"Falkenstein running on port {settings.frontend_port}")
     yield
 
@@ -142,6 +147,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Falkenstein", lifespan=lifespan)
+app.include_router(admin_router)
 
 frontend_dir = Path(__file__).parent.parent / "frontend"
 if frontend_dir.exists():
@@ -154,6 +160,14 @@ async def index():
     if index_path.exists():
         return FileResponse(index_path)
     return {"status": "Falkenstein running"}
+
+
+@app.get("/admin")
+async def admin_page():
+    admin_path = frontend_dir / "admin.html"
+    if admin_path.exists():
+        return FileResponse(admin_path)
+    return {"error": "admin.html not found"}
 
 
 @app.websocket("/ws")
