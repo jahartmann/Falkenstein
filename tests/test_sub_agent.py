@@ -18,7 +18,7 @@ def test_coder_has_correct_tools():
 
 
 def test_researcher_has_correct_tools():
-    assert "web_surfer" in SUB_AGENT_TOOLS["researcher"]
+    assert "web_research" in SUB_AGENT_TOOLS["researcher"]
     assert "vision" in SUB_AGENT_TOOLS["researcher"]
 
 

@@ -28,8 +28,6 @@ class Settings(BaseSettings):
     # Obsidian
     obsidian_watch_enabled: bool = True
     obsidian_auto_submit_tasks: bool = True
-    # LLM backend: ollama | gemini_cli | claude_cli
-    llm_backend: str = "ollama"
 
     @property
     def model_light(self) -> str:

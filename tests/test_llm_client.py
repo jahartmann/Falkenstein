@@ -38,16 +38,3 @@ async def test_chat_with_tools_returns_tool_call():
         assert result["tool_calls"][0]["function"]["name"] == "web_surfer"
 
 
-@pytest.mark.asyncio
-async def test_generate_sim_action_returns_string():
-    mock_response = {"message": {"content": "wander"}}
-    with patch("backend.llm_client.ollama_chat") as mock_chat:
-        mock_chat.return_value = mock_response
-        client = LLMClient()
-        result = await client.generate_sim_action(
-            agent_name="Alex",
-            personality="social and curious",
-            nearby_agents=["Bob", "Amelia"],
-        )
-        assert isinstance(result, str)
-        assert len(result) > 0

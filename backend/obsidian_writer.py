@@ -74,15 +74,19 @@ class ObsidianWriter:
         checkbox = "[x]" if target_section == "done" else "[ ]"
         entry = f"- {checkbox} [[Tasks/{note_name}|{title}]]"
 
-        # Remove existing entry for this task (if moving)
+        # Remove existing entry for this task (match by wikilink, not substring)
+        entry_marker = f"[[Tasks/{note_name}|"
         lines = text.split("\n")
-        lines = [l for l in lines if title not in l or l.startswith("## ")]
+        lines = [l for l in lines if entry_marker not in l]
         text = "\n".join(lines)
 
-        # Insert under target section
-        idx = text.index(target_header)
-        insert_pos = idx + len(target_header)
-        text = text[:insert_pos] + f"\n{entry}" + text[insert_pos:]
+        # Insert under target section (create section if missing)
+        idx = text.find(target_header)
+        if idx == -1:
+            text += f"\n{target_header}\n{entry}\n"
+        else:
+            insert_pos = idx + len(target_header)
+            text = text[:insert_pos] + f"\n{entry}" + text[insert_pos:]
 
         self.kanban_path.write_text(text, encoding="utf-8")
 

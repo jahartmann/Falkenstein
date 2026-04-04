@@ -202,16 +202,19 @@ async def get_tasks():
 @app.get("/api/status")
 async def get_status():
     status = main_agent.get_status() if main_agent else {"active_agents": []}
-    status["budget"] = {
-        "used": budget_tracker.used,
-        "budget": budget_tracker.daily_budget,
-        "remaining": budget_tracker.remaining,
-    }
+    if budget_tracker:
+        status["budget"] = {
+            "used": budget_tracker.used,
+            "budget": budget_tracker.daily_budget,
+            "remaining": budget_tracker.remaining,
+        }
     return status
 
 
 @app.get("/api/budget")
 async def get_budget():
+    if not budget_tracker:
+        return {"error": "not initialized"}
     return {
         "used": budget_tracker.used,
         "budget": budget_tracker.daily_budget,

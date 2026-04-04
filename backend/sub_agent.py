@@ -3,7 +3,7 @@ from backend.tools.base import ToolRegistry, ToolResult
 
 SUB_AGENT_TOOLS: dict[str, list[str]] = {
     "coder": ["shell_runner", "code_executor", "cli_bridge"],
-    "researcher": ["web_surfer", "vision", "cli_bridge"],
+    "researcher": ["web_research", "vision", "cli_bridge"],
     "writer": ["obsidian_manager", "cli_bridge"],
     "ops": ["shell_runner", "cli_bridge"],
 }

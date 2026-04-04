@@ -4,7 +4,7 @@ import re
 from ollama import chat as ollama_chat
 from backend.config import settings
 
-_THINK_RE = re.compile(r"<\|channel>thought.*?<channel\|>", re.DOTALL)
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 
 
 def strip_thinking(text: str) -> str:
@@ -103,48 +103,6 @@ class LLMClient:
         if msg.get("content"):
             msg["content"] = strip_thinking(msg["content"])
         return msg
-
-    async def generate_sim_action(
-        self, agent_name: str, personality: str, nearby_agents: list[str]
-    ) -> str:
-        nearby = ", ".join(nearby_agents) if nearby_agents else "niemand"
-        prompt = (
-            f"Du bist {agent_name}, ein Büro-Mitarbeiter. "
-            f"Persönlichkeit: {personality}. "
-            f"In deiner Nähe: {nearby}. "
-            f"Du hast gerade nichts zu tun. Was machst du? "
-            f"Antworte mit GENAU EINEM Wort: wander, talk, coffee, phone, sit"
-        )
-        response = await self.chat(
-            system_prompt="Du simulierst einen Büro-Mitarbeiter. Antworte immer mit genau einem Wort.",
-            messages=[{"role": "user", "content": prompt}],
-            model=self.model_light,
-            num_predict=10,
-            temperature=0.8,
-        )
-        action = response.strip().lower().rstrip(".")
-        for valid in ["wander", "talk", "coffee", "phone", "sit"]:
-            if valid in action:
-                return valid
-        return "sit"
-
-    async def generate_chat_message(
-        self, agent_name: str, personality: str, partner_name: str, topic: str | None = None
-    ) -> str:
-        prompt = (
-            f"Du bist {agent_name} und redest gerade mit {partner_name} im Büro. "
-            f"Deine Persönlichkeit: {personality}. "
-        )
-        if topic:
-            prompt += f"Thema: {topic}. "
-        prompt += "Sag etwas Kurzes und Natürliches (max 15 Wörter, auf Deutsch)."
-        return await self.chat(
-            system_prompt="Du bist ein Büro-Mitarbeiter in einer Simulation. Rede natürlich und kurz.",
-            messages=[{"role": "user", "content": prompt}],
-            model=self.model_light,
-            num_predict=100,
-            temperature=0.9,
-        )
 
     async def confidence_check(self, task_description: str, result: str) -> dict:
         prompt = (
