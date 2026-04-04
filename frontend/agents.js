@@ -30,8 +30,9 @@ class AgentDisplay {
         const x = MAIN_AGENT_POS.x * this.tileSize + this.tileSize / 2;
         const y = MAIN_AGENT_POS.y * this.tileSize + this.tileSize / 2;
         this.mainSprite = this.scene.add.sprite(x, y, 'alex', 0);
+        this.mainSprite.setScale(3);
         this.mainSprite.setDepth(10);
-        this.mainLabel = this.scene.add.text(x, y - 30, '🧠 Falkenstein', {
+        this.mainLabel = this.scene.add.text(x, y - 55, '🧠 Falkenstein', {
             fontSize: '12px',
             color: '#ffffff',
             backgroundColor: '#333333',
@@ -46,12 +47,13 @@ class AgentDisplay {
         const y = pos.y * this.tileSize + this.tileSize / 2;
 
         const sprite = this.scene.add.sprite(x, y, spriteInfo.key, spriteInfo.frame);
+        sprite.setScale(3);
         sprite.setDepth(10);
         sprite.setAlpha(0);
         this.scene.tweens.add({ targets: sprite, alpha: 1, duration: 500 });
         this.sprites[agentId] = sprite;
 
-        const bubble = this.scene.add.text(x, y - 35, `💻 ${taskTitle}`, {
+        const bubble = this.scene.add.text(x, y - 55, `💻 ${taskTitle}`, {
             fontSize: '10px',
             color: '#ffffff',
             backgroundColor: '#1a1a2e',

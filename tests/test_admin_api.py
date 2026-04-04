@@ -91,10 +91,11 @@ def test_get_settings_masks_token(client):
 
 
 def test_put_settings_hot_reload(client):
-    resp = client.put("/api/admin/settings", json={
-        "group": "cli",
-        "values": {"cli_daily_token_budget": "99999"},
-    })
+    with patch("backend.admin_api.write_env_file"):
+        resp = client.put("/api/admin/settings", json={
+            "group": "cli",
+            "values": {"cli_daily_token_budget": "99999"},
+        })
     assert resp.status_code == 200
     data = resp.json()
     assert data["saved"] is True
@@ -103,10 +104,11 @@ def test_put_settings_hot_reload(client):
 
 
 def test_put_settings_restart_required(client):
-    resp = client.put("/api/admin/settings", json={
-        "group": "server",
-        "values": {"frontend_port": "9999"},
-    })
+    with patch("backend.admin_api.write_env_file"):
+        resp = client.put("/api/admin/settings", json={
+            "group": "server",
+            "values": {"frontend_port": "9999"},
+        })
     assert resp.status_code == 200
     data = resp.json()
     assert data["restart_required"] is True
