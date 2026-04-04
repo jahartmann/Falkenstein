@@ -40,4 +40,14 @@ class Settings(BaseSettings):
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
 
+# Fields that can be updated at runtime without server restart
+HOT_RELOAD_FIELDS: set[str] = {
+    "ollama_host", "ollama_model", "ollama_model_light", "ollama_model_heavy",
+    "ollama_num_ctx", "ollama_num_ctx_extended",
+    "telegram_bot_token", "telegram_chat_id",
+    "cli_provider", "cli_daily_token_budget",
+    "obsidian_vault_path", "obsidian_watch_enabled", "obsidian_auto_submit_tasks",
+    "llm_max_retries",
+}
+
 settings = Settings()
