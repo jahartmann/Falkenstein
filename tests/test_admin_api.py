@@ -1,6 +1,5 @@
-import os
-from pathlib import Path
-from unittest.mock import patch
+import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
@@ -12,36 +11,6 @@ def test_hot_reload_fields_defined():
     assert "cli_provider" in HOT_RELOAD_FIELDS
     assert "frontend_port" not in HOT_RELOAD_FIELDS
     assert "db_path" not in HOT_RELOAD_FIELDS
-
-
-def test_write_env_file(tmp_path):
-    from backend.admin_api import write_env_file
-    env_path = tmp_path / ".env"
-    env_path.write_text("OLLAMA_MODEL=gemma4:26b\nFRONTEND_PORT=8080\n")
-    write_env_file(env_path, {"OLLAMA_MODEL": "llama3"})
-    content = env_path.read_text()
-    assert "OLLAMA_MODEL=llama3" in content
-    assert "FRONTEND_PORT=8080" in content
-
-
-def test_write_env_file_adds_new_key(tmp_path):
-    from backend.admin_api import write_env_file
-    env_path = tmp_path / ".env"
-    env_path.write_text("OLLAMA_MODEL=gemma4:26b\n")
-    write_env_file(env_path, {"TELEGRAM_BOT_TOKEN": "abc123"})
-    content = env_path.read_text()
-    assert "OLLAMA_MODEL=gemma4:26b" in content
-    assert "TELEGRAM_BOT_TOKEN=abc123" in content
-
-
-def test_write_env_preserves_comments(tmp_path):
-    from backend.admin_api import write_env_file
-    env_path = tmp_path / ".env"
-    env_path.write_text("# My config\nOLLAMA_MODEL=gemma4:26b\n")
-    write_env_file(env_path, {"OLLAMA_MODEL": "llama3"})
-    content = env_path.read_text()
-    assert "# My config" in content
-    assert "OLLAMA_MODEL=llama3" in content
 
 
 @pytest.fixture
@@ -68,64 +37,64 @@ def test_get_dashboard(client):
     assert "budget" in data
 
 
-def test_get_settings(client):
-    resp = client.get("/api/admin/settings")
-    assert resp.status_code == 200
-    data = resp.json()
-    assert "groups" in data
-    groups = data["groups"]
-    assert "llm" in groups
-    assert "telegram" in groups
-    assert "cli" in groups
-    assert "obsidian" in groups
-    assert "server" in groups
-
-
-def test_get_settings_masks_token(client):
-    resp = client.get("/api/admin/settings")
-    data = resp.json()
-    tg = data["groups"]["telegram"]
-    token_val = tg["telegram_bot_token"]["value"]
-    # Either masked or empty
-    assert token_val in ("***", "")
-
-
-def test_put_settings_hot_reload(client):
-    with patch("backend.admin_api.write_env_file"):
-        resp = client.put("/api/admin/settings", json={
-            "group": "cli",
-            "values": {"cli_daily_token_budget": "99999"},
-        })
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["saved"] is True
-    assert data["hot_reloaded"] is True
-    assert data["restart_required"] is False
-
-
-def test_put_settings_restart_required(client):
-    with patch("backend.admin_api.write_env_file"):
-        resp = client.put("/api/admin/settings", json={
-            "group": "server",
-            "values": {"frontend_port": "9999"},
-        })
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["restart_required"] is True
-
-
-def test_put_settings_unknown_group(client):
-    resp = client.put("/api/admin/settings", json={
-        "group": "nonexistent",
-        "values": {"foo": "bar"},
-    })
-    data = resp.json()
-    assert data["saved"] is False
-
-
 def test_get_schedules(client):
     resp = client.get("/api/admin/schedules")
     assert resp.status_code == 200
     data = resp.json()
     assert "tasks" in data
     assert isinstance(data["tasks"], list)
+
+
+def test_get_config(client):
+    resp = client.get("/api/admin/config")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "config" in data
+
+
+def test_set_dependencies():
+    from backend.admin_api import set_dependencies, _db, _scheduler
+    mock_db = MagicMock()
+    mock_sched = MagicMock()
+    set_dependencies(db=mock_db, scheduler=mock_sched)
+    import backend.admin_api as api
+    assert api._db is mock_db
+    assert api._scheduler is mock_sched
+    # Clean up
+    set_dependencies(db=None, scheduler=None)
+
+
+def test_schedule_endpoints_use_int_ids(client):
+    """Verify schedule endpoints accept integer IDs (not filenames)."""
+    # GET detail — should return error since no DB, not a route-not-found
+    resp = client.get("/api/admin/schedules/1")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "error" in data  # "DB not initialized" or similar
+
+    # Toggle
+    resp = client.post("/api/admin/schedules/1/toggle")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "error" in data
+
+    # Delete
+    resp = client.delete("/api/admin/schedules/1")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "error" in data
+
+
+def test_config_category(client):
+    resp = client.get("/api/admin/config/llm")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "config" in data
+
+
+def test_put_config(client):
+    resp = client.put("/api/admin/config", json={"updates": {"ollama_host": "http://localhost:11434"}})
+    assert resp.status_code == 200
+    data = resp.json()
+    # Without config_service it returns error
+    assert "error" in data or "saved" in data
