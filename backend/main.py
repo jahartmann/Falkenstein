@@ -14,6 +14,7 @@ from backend.telegram_bot import TelegramBot
 from backend.main_agent import MainAgent
 from backend.obsidian_writer import ObsidianWriter
 from backend.obsidian_watcher import ObsidianWatcher
+from backend.scheduler import Scheduler
 from backend.tools.base import ToolRegistry
 from backend.tools.file_manager import FileManagerTool
 from backend.tools.web_surfer import WebSurferTool
@@ -30,6 +31,8 @@ main_agent: MainAgent = None
 budget_tracker: CLIBudgetTracker = None
 telegram_task: asyncio.Task = None
 watcher_task: asyncio.Task = None
+scheduler: Scheduler = None
+scheduler_task: asyncio.Task = None
 
 
 async def handle_telegram_message(msg: dict):
@@ -68,7 +71,7 @@ async def handle_obsidian_todo(content: str, source_file: str):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global db, telegram, telegram_task, main_agent, budget_tracker, watcher_task
+    global db, telegram, telegram_task, main_agent, budget_tracker, watcher_task, scheduler, scheduler_task
 
     # Database
     db = Database(settings.db_path)
@@ -124,6 +127,14 @@ async def lifespan(app: FastAPI):
         watcher_task = asyncio.create_task(watcher.start())
         print("Obsidian watcher active")
 
+    # Start Scheduler
+    if settings.obsidian_vault_path.exists():
+        scheduler = Scheduler(vault_path=settings.obsidian_vault_path)
+        scheduler_task = asyncio.create_task(
+            scheduler.start(on_task_due=main_agent.handle_scheduled)
+        )
+        print("Scheduler active")
+
     from backend import admin_api
     admin_api.init(start_time=_time.time())
 
@@ -141,6 +152,12 @@ async def lifespan(app: FastAPI):
         watcher_task.cancel()
         try:
             await watcher_task
+        except asyncio.CancelledError:
+            pass
+    if scheduler_task:
+        scheduler_task.cancel()
+        try:
+            await scheduler_task
         except asyncio.CancelledError:
             pass
     await db.close()

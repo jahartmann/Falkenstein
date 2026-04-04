@@ -28,6 +28,7 @@ VAULT_STRUCTURE = {
                 "# Kanban Board\n\n"
                 "## Backlog\n\n## In Progress\n\n## Done\n\n## Archiv\n"
             ),
+            "Schedules": {},
         },
     },
 }
