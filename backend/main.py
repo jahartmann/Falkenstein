@@ -6,15 +6,16 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from backend.config import settings
+from backend.config import DB_PATH, PORT, settings
+from backend.config_service import ConfigService
 from backend.admin_api import router as admin_router
+from backend import admin_api
 from backend.database import Database
 from backend.llm_client import LLMClient
 from backend.ws_manager import WSManager
 from backend.telegram_bot import TelegramBot
 from backend.main_agent import MainAgent
 from backend.obsidian_writer import ObsidianWriter
-from backend.obsidian_watcher import ObsidianWatcher
 from backend.scheduler import Scheduler
 from backend.tools.base import ToolRegistry
 from backend.tools.file_manager import FileManagerTool
@@ -38,7 +39,6 @@ main_agent: MainAgent = None
 budget_tracker: CLIBudgetTracker = None
 llm_router: LLMRouter = None
 telegram_task: asyncio.Task = None
-watcher_task: asyncio.Task = None
 scheduler: Scheduler = None
 scheduler_task: asyncio.Task = None
 
@@ -60,63 +60,62 @@ async def handle_telegram_message(msg: dict):
     await main_agent.handle_message(text, chat_id=chat_id)
 
 
-async def handle_obsidian_todo(todo: dict):
-    """New todo from Obsidian Inbox -> MainAgent."""
-    await main_agent.handle_message(
-        todo["content"],
-        agent_type_hint=todo.get("agent_type"),
-        project_hint=todo.get("project"),
-    )
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global db, telegram, telegram_task, main_agent, budget_tracker, watcher_task, scheduler, scheduler_task, fact_memory, llm_router
+    global db, telegram, telegram_task, main_agent, budget_tracker, scheduler, scheduler_task, fact_memory, llm_router
 
-    # Database
-    db = Database(settings.db_path)
+    # 1. Database
+    db = Database(DB_PATH)
     await db.init()
 
-    # Fact Memory
+    # 2. ConfigService (DB-backed config)
+    config_service = ConfigService(db)
+    await config_service.init()
+
+    # 3. Fact Memory
     fact_memory = FactMemory(db)
     await fact_memory.init()
 
-    # LLM + Router
+    # 4. LLM + Router (LLMClient still reads from legacy settings)
     llm = LLMClient()
     llm_router = LLMRouter(local_llm=llm)
 
-    # Tools
+    # 5. Tools (use config_service for paths)
+    vault_path = config_service.get_path("obsidian_vault_path")
+    workspace = config_service.get_path("workspace_path")
+    workspace.mkdir(parents=True, exist_ok=True)
+
     tools = ToolRegistry()
-    settings.workspace_path.mkdir(parents=True, exist_ok=True)
-    tools.register(FileManagerTool(workspace_path=settings.workspace_path))
+    tools.register(FileManagerTool(workspace_path=workspace))
     tools.register(WebSurferTool())
-    tools.register(ShellRunnerTool(workspace_path=settings.workspace_path))
-    tools.register(CodeExecutorTool(workspace_path=settings.workspace_path))
-    tools.register(ObsidianManagerTool(vault_path=settings.obsidian_vault_path))
-    budget_tracker = CLIBudgetTracker(daily_budget=settings.cli_daily_token_budget)
+    tools.register(ShellRunnerTool(workspace_path=workspace))
+    tools.register(CodeExecutorTool(workspace_path=workspace))
+    tools.register(ObsidianManagerTool(vault_path=vault_path))
+
+    cli_budget = config_service.get_int("cli_daily_token_budget", 50000)
+    cli_provider = config_service.get("cli_provider", "claude")
+    budget_tracker = CLIBudgetTracker(daily_budget=cli_budget)
     tools.register(CLIBridgeTool(
-        workspace_path=settings.workspace_path,
+        workspace_path=workspace,
         budget_tracker=budget_tracker,
-        provider=settings.cli_provider,
+        provider=cli_provider,
     ))
-    tools.register(VisionTool(workspace_path=settings.workspace_path, llm=llm))
+    tools.register(VisionTool(workspace_path=workspace, llm=llm))
     project_root = Path(__file__).parent.parent
     tools.register(SystemShellTool())
     tools.register(OllamaManagerTool())
     tools.register(SelfConfigTool(project_path=project_root))
 
-    # Obsidian Writer
-    obsidian_writer = ObsidianWriter(vault_path=settings.obsidian_vault_path)
+    # 6. Obsidian Writer
+    obsidian_writer = ObsidianWriter(vault_path=vault_path)
 
-    # Telegram
+    # 7. Telegram
     telegram = TelegramBot()
 
-    # Scheduler (create early so MainAgent can reference it)
-    scheduler = None
-    if settings.obsidian_vault_path.exists():
-        scheduler = Scheduler(vault_path=settings.obsidian_vault_path)
+    # 8. Scheduler (DB-backed)
+    scheduler = Scheduler(db)
 
-    # MainAgent (Falki)
+    # 9. MainAgent (Falki)
     main_agent = MainAgent(
         llm=llm,
         tools=tools,
@@ -127,34 +126,32 @@ async def lifespan(app: FastAPI):
         fact_memory=fact_memory,
         scheduler=scheduler,
         llm_router=llm_router,
+        config_service=config_service,
     )
 
-    # Start Telegram polling
+    # 10. Wire admin API
+    admin_api.set_dependencies(
+        db=db, scheduler=scheduler, config_service=config_service,
+        main_agent=main_agent, budget_tracker=budget_tracker,
+        llm_router=llm_router,
+    )
+    admin_api.init(start_time=_time.time())
+
+    # 11. Start Scheduler
+    scheduler_task = asyncio.create_task(
+        scheduler.start(on_task_due=main_agent.handle_scheduled)
+    )
+    print("Scheduler active")
+
+    # 12. Start Telegram polling (if enabled)
     if telegram.enabled:
         telegram.on_message(handle_telegram_message)
         telegram_task = asyncio.create_task(telegram.poll_loop())
         print("Telegram bot active")
 
-    # Start Obsidian Watcher
-    if settings.obsidian_watch_enabled and settings.obsidian_vault_path.exists():
-        watcher = ObsidianWatcher(
-            vault_path=settings.obsidian_vault_path,
-            on_new_todo=handle_obsidian_todo,
-        )
-        watcher_task = asyncio.create_task(watcher.start())
-        print("Obsidian watcher active")
+    # NO ObsidianWatcher start
 
-    # Start Scheduler
-    if scheduler:
-        scheduler_task = asyncio.create_task(
-            scheduler.start(on_task_due=main_agent.handle_scheduled)
-        )
-        print("Scheduler active")
-
-    from backend import admin_api
-    admin_api.init(start_time=_time.time())
-
-    print(f"Falki running on port {settings.frontend_port}")
+    print(f"Falki running on port {PORT}")
     yield
 
     # Shutdown
@@ -162,12 +159,6 @@ async def lifespan(app: FastAPI):
         telegram_task.cancel()
         try:
             await telegram_task
-        except asyncio.CancelledError:
-            pass
-    if watcher_task:
-        watcher_task.cancel()
-        try:
-            await watcher_task
         except asyncio.CancelledError:
             pass
     if scheduler_task:
@@ -189,18 +180,14 @@ if frontend_dir.exists():
 
 @app.get("/")
 async def index():
+    # Prefer dashboard.html, fall back to index.html
+    dashboard_path = frontend_dir / "dashboard.html"
+    if dashboard_path.exists():
+        return FileResponse(dashboard_path)
     index_path = frontend_dir / "index.html"
     if index_path.exists():
         return FileResponse(index_path)
     return {"status": "Falkenstein running"}
-
-
-@app.get("/admin")
-async def admin_page():
-    admin_path = frontend_dir / "admin.html"
-    if admin_path.exists():
-        return FileResponse(admin_path)
-    return {"error": "admin.html not found"}
 
 
 @app.websocket("/ws")
@@ -311,4 +298,4 @@ async def get_external_agents():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("backend.main:app", host="0.0.0.0", port=settings.frontend_port, reload=True)
+    uvicorn.run("backend.main:app", host="0.0.0.0", port=PORT, reload=True)

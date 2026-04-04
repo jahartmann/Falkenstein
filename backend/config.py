@@ -1,7 +1,17 @@
-from pydantic_settings import BaseSettings
+"""Bootstrap config + legacy Settings for backward compatibility."""
+import os
 from pathlib import Path
 
+from pydantic_settings import BaseSettings
 
+# Bootstrap (used before DB is available)
+PORT = int(os.getenv("PORT", "8800"))
+DB_PATH = Path(os.getenv("DB_PATH", "./data/falkenstein.db"))
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+
+
+# Legacy Settings (still used by LLMClient, TelegramBot, etc.)
 class Settings(BaseSettings):
     ollama_host: str = "http://localhost:11434"
     ollama_model: str = "gemma4:26b"
