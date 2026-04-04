@@ -5,9 +5,9 @@ from typing import Any
 import aiosqlite
 
 from backend.models import (
-    AgentData, AgentMood, AgentRole, AgentState, AgentTraits,
+    AgentData, AgentRole, AgentState,
     MessageData, MessageType, Position,
-    RelationshipData, TaskData, TaskStatus,
+    TaskData, TaskStatus,
 )
 
 
@@ -124,8 +124,6 @@ class Database:
                 state           = excluded.state,
                 position_x      = excluded.position_x,
                 position_y      = excluded.position_y,
-                traits          = excluded.traits,
-                mood            = excluded.mood,
                 current_task_id = excluded.current_task_id
             """,
             (
@@ -135,24 +133,20 @@ class Database:
                 agent.state.value,
                 agent.position.x,
                 agent.position.y,
-                json.dumps(agent.traits.model_dump()),
-                json.dumps(agent.mood.model_dump()),
+                "{}",
+                "{}",
                 agent.current_task_id,
             ),
         )
         await self._conn.commit()
 
     def _row_to_agent(self, row: aiosqlite.Row) -> AgentData:
-        traits_dict = json.loads(row["traits"])
-        mood_dict = json.loads(row["mood"])
         return AgentData(
             id=row["id"],
             name=row["name"],
             role=AgentRole(row["role"]),
             state=AgentState(row["state"]),
             position=Position(x=row["position_x"], y=row["position_y"]),
-            traits=AgentTraits(**traits_dict),
-            mood=AgentMood(**mood_dict),
             current_task_id=row["current_task_id"],
         )
 
