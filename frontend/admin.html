@@ -117,6 +117,14 @@
             font-size: 12px; margin-right: 6px; margin-bottom: 4px;
         }
         .agent-chip .dot { width: 8px; height: 8px; border-radius: 50%; background: #4ade80; }
+        .schedule-row { display: flex; align-items: center; gap: 12px; padding: 12px; background: #1e293b; border: 1px solid #334155; border-radius: 6px; margin-bottom: 8px; }
+        .schedule-name { font-weight: 600; min-width: 150px; }
+        .schedule-cron { color: #94a3b8; font-size: 13px; min-width: 140px; }
+        .schedule-next { color: #64748b; font-size: 12px; flex: 1; }
+        .schedule-toggle { background: none; border: 1px solid #334155; color: #94a3b8; padding: 4px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; }
+        .schedule-toggle.active { border-color: #4ade80; color: #4ade80; }
+        .schedule-run { background: #334155; border: none; color: #e2e8f0; padding: 4px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; }
+        .schedule-run:hover { background: #475569; }
     </style>
 </head>
 <body>
@@ -134,6 +142,10 @@
         <div class="settings-section">
             <h2>Einstellungen</h2>
             <div id="settings-container"></div>
+        </div>
+        <div class="settings-section">
+            <h2>Scheduled Tasks</h2>
+            <div id="schedules-container"></div>
         </div>
     </main>
     <script>
@@ -254,9 +266,48 @@
         el.type = el.type === 'password' ? 'text' : 'password';
     }
 
+    async function loadSchedules() {
+        try {
+            const resp = await fetch('/api/admin/schedules');
+            const data = await resp.json();
+            const container = document.getElementById('schedules-container');
+            if (data.tasks.length === 0) {
+                container.innerHTML = '<div style="color:#64748b;font-size:14px">Keine Scheduled Tasks.</div>';
+                return;
+            }
+            container.innerHTML = data.tasks.map(t => {
+                const lastRun = t.last_run ? new Date(t.last_run).toLocaleString('de') : 'nie';
+                const nextRun = t.next_run ? new Date(t.next_run).toLocaleString('de') : '—';
+                const activeClass = t.active ? ' active' : '';
+                const activeLabel = t.active ? '● aktiv' : '○ inaktiv';
+                const hours = t.active_hours ? ' (' + t.active_hours + ')' : '';
+                return '<div class="schedule-row">' +
+                    '<span class="schedule-name">' + t.name + '</span>' +
+                    '<span class="schedule-cron">' + t.schedule + hours + '</span>' +
+                    '<span class="schedule-next">Nächste: ' + nextRun + '<br>Letzte: ' + lastRun + '</span>' +
+                    '<button class="schedule-toggle' + activeClass + '" onclick="toggleSchedule(\'' + t.filename + '\')">' + activeLabel + '</button>' +
+                    '<button class="schedule-run" onclick="runSchedule(\'' + t.filename + '\')">▶ Jetzt</button>' +
+                    '</div>';
+            }).join('');
+        } catch (e) { console.error('Schedules load error:', e); }
+    }
+
+    async function toggleSchedule(filename) {
+        await fetch('/api/admin/schedules/' + filename + '/toggle', { method: 'PUT' });
+        loadSchedules();
+    }
+
+    async function runSchedule(filename) {
+        const resp = await fetch('/api/admin/schedules/' + filename + '/run', { method: 'POST' });
+        const data = await resp.json();
+        if (data.triggered) { alert('Task "' + data.name + '" gestartet!'); }
+        loadSchedules();
+    }
+
     loadDashboard();
     loadSettings();
-    setInterval(loadDashboard, 10000);
+    loadSchedules();
+    setInterval(() => { loadDashboard(); loadSchedules(); }, 10000);
     </script>
 </body>
 </html>
