@@ -74,8 +74,6 @@ class MainAgent:
         self.config_service = config_service
         self.active_agents: dict[str, dict] = {}
         self._pending_tasks: dict[int, asyncio.Task] = {}
-        self._chat_history: dict[str, list[dict]] = {}
-        self._max_history = 20
 
     async def _build_context(self) -> str:
         """Build system context from DB for the classify prompt."""
@@ -100,7 +98,7 @@ class MainAgent:
             pass
         return "\n\n".join(parts) if parts else "Keine aktiven Tasks."
 
-    async def classify(self, message: str) -> dict:
+    async def classify(self, message: str, chat_id: str = "") -> dict:
         context = await self._build_context()
         # Build system prompt: SOUL + facts + classify instructions + status
         parts = []
@@ -117,9 +115,11 @@ class MainAgent:
         parts.append(f"\n## Aktueller System-Status\n{context}")
         system = "\n\n".join(parts)
         llm = self.llm_router.get_client("classify") if self.llm_router else self.llm
+        history = await self.db.get_chat_history(chat_id or "default", limit=10)
+        messages = history + [{"role": "user", "content": message}]
         response = await llm.chat(
             system_prompt=system,
-            messages=[{"role": "user", "content": message}],
+            messages=messages,
             temperature=0.1,
         )
         try:
@@ -465,6 +465,9 @@ class MainAgent:
                 await self.telegram.send_message(cmd_response[:4000], chat_id=chat_id or None)
             return
 
+        text = text.strip()
+        await self.db.append_chat(chat_id or "default", "user", text)
+
         if agent_type_hint:
             # Inbox tag provided — skip LLM classification
             classification = {
@@ -474,11 +477,12 @@ class MainAgent:
                 "result_type": "report",
             }
         else:
-            classification = await self.classify(text)
+            classification = await self.classify(text, chat_id=chat_id)
         msg_type = classification.get("type", "quick_reply")
 
         if msg_type == "quick_reply":
             answer = classification.get("answer", "Ich habe keine Antwort.")
+            await self.db.append_chat(chat_id or "default", "assistant", answer)
             if self.telegram:
                 await self.telegram.send_message(answer[:4000], chat_id=chat_id or None)
             # Fire-and-forget: extract facts from this exchange
