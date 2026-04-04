@@ -21,8 +21,8 @@ async def test_reload_preserves_next_run():
 
 
 @pytest.mark.asyncio
-async def test_cron_syntax_sets_error():
-    """cron: prefix should skip schedule and set error."""
+async def test_cron_syntax_loads_successfully():
+    """cron: prefix should be parsed and loaded as a valid schedule."""
     db = AsyncMock()
     sched = Scheduler(db)
     db.get_all_schedules.return_value = [
@@ -31,12 +31,14 @@ async def test_cron_syntax_sets_error():
          "last_run": None, "last_status": None, "last_error": None}
     ]
     await sched.load_tasks()
-    db.update_schedule_result.assert_called_once()
-    call_args = db.update_schedule_result.call_args
-    assert call_args[0][1] == "error"
-    assert "cron" in call_args[0][2].lower() or "nicht unterstützt" in call_args[0][2].lower()
-    # Cron schedule should NOT be in tasks
-    assert len(sched.tasks) == 0
+    assert len(sched.tasks) == 1
+    assert sched.tasks[0]["_parsed"]["type"] == "cron"
+    assert sched.tasks[0]["_parsed"]["expr"] == "0 9 * * 1-5"
+    # next_run should be a weekday at 09:00
+    nr = sched.tasks[0]["_next_run"]
+    assert nr.hour == 9
+    assert nr.minute == 0
+    assert nr.weekday() < 5  # Mon-Fri
 
 
 def test_get_next_runs():

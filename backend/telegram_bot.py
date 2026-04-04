@@ -51,6 +51,19 @@ class TelegramBot:
         target = chat_id or self.chat_id
         try:
             async with httpx.AsyncClient(timeout=10) as client:
+                # Try with Markdown first
+                resp = await client.post(
+                    f"{self.base_url}/sendMessage",
+                    json={
+                        "chat_id": target,
+                        "text": text,
+                        "parse_mode": "Markdown",
+                        "reply_markup": {"inline_keyboard": buttons},
+                    },
+                )
+                if resp.status_code == 200:
+                    return True
+                # Markdown parse error — retry without formatting
                 resp = await client.post(
                     f"{self.base_url}/sendMessage",
                     json={

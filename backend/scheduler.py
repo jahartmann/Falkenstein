@@ -2,9 +2,21 @@ import asyncio
 import datetime
 import re
 
+from croniter import croniter
+
 _WEEKDAY_MAP = {
     "montags": 0, "dienstags": 1, "mittwochs": 2, "donnerstags": 3,
     "freitags": 4, "samstags": 5, "sonntags": 6,
+}
+
+
+_TIME_ALIASES = {
+    "morgens": (7, 0), "morgen": (7, 0), "früh": (7, 0),
+    "vormittags": (10, 0), "vormittag": (10, 0),
+    "mittags": (12, 0), "mittag": (12, 0),
+    "nachmittags": (14, 0), "nachmittag": (14, 0),
+    "abends": (19, 0), "abend": (19, 0),
+    "nachts": (23, 0), "nacht": (23, 0),
 }
 
 
@@ -16,6 +28,12 @@ def parse_schedule(schedule_str: str) -> dict:
     m = re.match(r"täglich\s+(\d{1,2}):(\d{2})", s)
     if m:
         return {"type": "daily", "hour": int(m.group(1)), "minute": int(m.group(2))}
+
+    # "täglich morgens/abends/mittags" etc.
+    m = re.match(r"täglich\s+(\w+)", s)
+    if m and m.group(1) in _TIME_ALIASES:
+        h, mi = _TIME_ALIASES[m.group(1)]
+        return {"type": "daily", "hour": h, "minute": mi}
 
     # "stündlich"
     if s == "stündlich":
@@ -51,10 +69,13 @@ def parse_schedule(schedule_str: str) -> dict:
         day_num = day_map.get(day_str, 0)
         return {"type": "weekly", "weekday": day_num, "hour": int(m.group(2)), "minute": int(m.group(3))}
 
-    # "cron: EXPR"
+    # "cron: EXPR" — validate with croniter
     m = re.match(r"cron:\s*(.+)", s)
     if m:
-        return {"type": "cron", "expr": m.group(1).strip()}
+        expr = m.group(1).strip()
+        if croniter.is_valid(expr):
+            return {"type": "cron", "expr": expr}
+        return {"type": "interval_minutes", "minutes": 60}  # invalid cron → fallback
 
     return {"type": "interval_minutes", "minutes": 60}  # fallback: hourly
 
@@ -110,22 +131,28 @@ def next_run(schedule: dict, after: datetime.datetime) -> datetime.datetime:
         return candidate
 
     if t == "cron":
-        # Simple fallback: treat as hourly if croniter not available
-        return after.replace(minute=0, second=0, microsecond=0) + datetime.timedelta(hours=1)
+        cron = croniter(schedule["expr"], after)
+        return cron.get_next(datetime.datetime)
 
     # Fallback
     return after + datetime.timedelta(hours=1)
 
 
-def get_next_runs(schedule: dict, count: int = 3, after: datetime.datetime | None = None) -> list[datetime.datetime]:
-    """Compute the next N run times for a schedule."""
+def get_next_runs(schedule: dict, count: int = 3, after: datetime.datetime | None = None,
+                   active_hours_str: str | None = None) -> list[datetime.datetime]:
+    """Compute the next N run times for a schedule, respecting active_hours."""
     if after is None:
         after = datetime.datetime.now()
+    ah = _parse_active_hours(active_hours_str)
     runs = []
     current = after
-    for _ in range(count):
+    # Safety limit to avoid infinite loops
+    for _ in range(count * 100):
         nxt = next_run(schedule, current)
-        runs.append(nxt)
+        if ah is None or _is_in_active_hours(ah, nxt):
+            runs.append(nxt)
+            if len(runs) >= count:
+                break
         current = nxt
     return runs
 
@@ -168,13 +195,6 @@ class Scheduler:
         self.tasks = []
         for row in rows:
             parsed = parse_schedule(row["schedule"])
-            # Warn and skip cron schedules (not supported)
-            if parsed.get("type") == "cron":
-                await self._db.update_schedule_result(
-                    row["id"], "error",
-                    "Cron-Syntax nicht unterstützt. Verwende deutsche Zeitangaben (z.B. 'täglich 09:00')."
-                )
-                continue
             last_run = (
                 datetime.datetime.fromisoformat(row["last_run"])
                 if row.get("last_run")

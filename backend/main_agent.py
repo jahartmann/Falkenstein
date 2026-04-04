@@ -232,10 +232,68 @@ class MainAgent:
             task = await self.db.get_task(int(tid))
             if not task:
                 return f"Task #{tid} nicht gefunden."
-            result_preview = (task.result or "Kein Ergebnis")[:1500]
-            return f"*Task #{task.id}: {task.title}*\nStatus: {task.status.value}\n\n{result_preview}"
+            raw = task.result or "Kein Ergebnis"
+            formatted = self._format_for_telegram(raw)
+            header = f"*Task #{task.id}: {task.title}*\nStatus: {task.status.value}\n\n"
+            full_text = header + formatted
+            # Split into 4096-char chunks for Telegram
+            if len(full_text) <= 4096:
+                return full_text
+            # Send first chunk as return, rest via telegram directly
+            chunks = self._split_telegram_message(full_text)
+            if self.telegram:
+                for chunk in chunks[1:]:
+                    await self.telegram.send_message(chunk, chat_id=chat_id or None)
+            return chunks[0]
         except Exception as e:
             return f"Fehler: {e}"
+
+    @staticmethod
+    def _format_for_telegram(text: str) -> str:
+        """Convert markdown to Telegram-compatible legacy Markdown."""
+        import re
+        lines = text.split("\n")
+        out = []
+        in_frontmatter = False
+        for line in lines:
+            stripped = line.strip()
+            # Strip YAML frontmatter
+            if stripped == "---":
+                in_frontmatter = not in_frontmatter
+                continue
+            if in_frontmatter:
+                continue
+            # Headings → bold
+            if stripped.startswith("#"):
+                heading = re.sub(r"^#{1,6}\s*", "", stripped)
+                out.append(f"*{heading}*")
+            # **bold** → *bold* (Telegram legacy Markdown)
+            elif "**" in line:
+                out.append(re.sub(r"\*\*(.+?)\*\*", r"*\1*", line))
+            else:
+                out.append(line)
+        result = "\n".join(out)
+        # Strip [[wiki links]] → just the text
+        result = re.sub(r"\[\[([^\]]+)\]\]", r"\1", result)
+        return result
+
+    @staticmethod
+    def _split_telegram_message(text: str, max_len: int = 4096) -> list[str]:
+        """Split text into Telegram-safe chunks, preferring line breaks."""
+        if len(text) <= max_len:
+            return [text]
+        chunks = []
+        while text:
+            if len(text) <= max_len:
+                chunks.append(text)
+                break
+            # Find last newline within limit
+            split_at = text.rfind("\n", 0, max_len)
+            if split_at <= 0:
+                split_at = max_len
+            chunks.append(text[:split_at])
+            text = text[split_at:].lstrip("\n")
+        return chunks
 
     async def _cmd_memory(self, chat_id: str) -> str:
         if not self.fact_memory:
@@ -742,18 +800,22 @@ class MainAgent:
                     except Exception as e:
                         print(f"Obsidian write failed: {e}")
 
-                # 6. Send result to Telegram
+                # 6. Send short summary to Telegram, full report in Obsidian
                 if self.telegram:
-                    summary = result[:500] + ("..." if len(result) > 500 else "")
+                    # Extract first paragraph as summary (max 300 chars)
+                    paragraphs = [p.strip() for p in result.split("\n\n") if p.strip() and not p.strip().startswith("#")]
+                    summary = paragraphs[0][:300] if paragraphs else result[:300]
+                    if len(summary) < len(paragraphs[0] if paragraphs else result):
+                        summary += "..."
                     if hasattr(self.telegram, 'send_message_with_buttons'):
                         await self.telegram.send_message_with_buttons(
-                            f"✅ Fertig: {title}\n\n{summary}\n\n📁 Ergebnis in Obsidian",
-                            [[{"text": "📋 Details", "callback_data": f"/task {task_id}"}]],
+                            f"✅ Fertig: *{title}*\n\n{summary}\n\n📁 Vollständiger Bericht in Obsidian",
+                            [[{"text": "📋 Details in Telegram", "callback_data": f"/task {task_id}"}]],
                             chat_id=chat_id or None,
                         )
                     else:
                         await self.telegram.send_message(
-                            f"✅ Fertig: {title}\n\n{summary}\n\n📁 Ergebnis in Obsidian",
+                            f"✅ Fertig: *{title}*\n\n{summary}\n\n📁 Vollständiger Bericht in Obsidian",
                             chat_id=chat_id or None,
                         )
 
@@ -763,6 +825,9 @@ class MainAgent:
                         "type": "agent_done", "agent_id": sub.agent_id,
                         "agent_type": agent_type, "task": title,
                     })
+
+                # 8. Check if any blocked tasks are now unblocked
+                await self._dispatch_unblocked_tasks(chat_id)
 
             except Exception as e:
                 await self.db.update_task_status(task_id, TaskStatus.FAILED)
@@ -861,6 +926,37 @@ class MainAgent:
         except Exception as e:
             if self.telegram:
                 await self.telegram.send_message(f"❌ Multi-Step Fehler: {e}", chat_id=chat_id or None)
+
+    async def _dispatch_unblocked_tasks(self, chat_id: str) -> None:
+        """Check for OPEN tasks whose dependencies are now all DONE, and dispatch them."""
+        try:
+            blocked = await self.db.get_blocked_tasks()
+            for task in blocked:
+                if await self.db.dependencies_met(task):
+                    dep_context = await self.db.get_dependency_results(task)
+                    # Build a classification-like dict and dispatch
+                    classification = {
+                        "type": "content",
+                        "agent": task.assigned_to or "researcher",
+                        "result_type": "report",
+                        "title": task.title,
+                    }
+                    if self.telegram:
+                        dep_ids = ", ".join(f"#{d}" for d in task.depends_on)
+                        await self.telegram.send_message(
+                            f"🔓 *{task.title}* — Abhängigkeiten erfüllt ({dep_ids}), starte...",
+                            chat_id=chat_id or None,
+                        )
+                    # Enrich description with dependency results
+                    enriched_text = (
+                        f"{task.description}\n\n"
+                        f"## Ergebnisse der Vorgänger-Tasks:\n{dep_context}"
+                    )
+                    asyncio.create_task(
+                        self._handle_content(classification, enriched_text, chat_id, project=task.project)
+                    )
+        except Exception as e:
+            print(f"Dependency dispatch error: {e}")
 
     async def handle_scheduled(self, task: dict) -> None:
         """Run a scheduled task through a SubAgent with full visibility."""

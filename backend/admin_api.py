@@ -62,6 +62,14 @@ class TaskSubmit(BaseModel):
     text: str
 
 
+class TaskCreate(BaseModel):
+    title: str
+    description: str
+    agent_type: str = "researcher"
+    project: str | None = None
+    depends_on: list[int] = []
+
+
 class TaskPatch(BaseModel):
     status: str
 
@@ -354,6 +362,25 @@ async def submit_task(data: TaskSubmit):
         return {"error": "Not initialized"}
     asyncio.create_task(_main_agent.handle_message(data.text))
     return {"submitted": True}
+
+
+@router.post("/tasks/create")
+async def create_task_with_deps(data: TaskCreate):
+    """Create a task with optional dependencies. Stays OPEN until deps are met."""
+    from backend.models import TaskData, TaskStatus
+    task = TaskData(
+        title=data.title,
+        description=data.description,
+        status=TaskStatus.OPEN,
+        assigned_to=data.agent_type,
+        project=data.project,
+        depends_on=data.depends_on,
+    )
+    task_id = await _db.create_task(task)
+    # If no dependencies, dispatch immediately
+    if not data.depends_on and _main_agent:
+        asyncio.create_task(_main_agent.handle_message(data.description))
+    return {"task_id": task_id, "depends_on": data.depends_on}
 
 
 @router.get("/agents/{agent_id}/log")

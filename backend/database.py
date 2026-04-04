@@ -52,6 +52,7 @@ class Database:
                 assigned_to    TEXT,
                 project        TEXT,
                 parent_task_id INTEGER,
+                depends_on     TEXT DEFAULT '',
                 result         TEXT,
                 created_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -152,6 +153,14 @@ class Database:
                 await self._conn.commit()
             except Exception:
                 pass  # column already exists
+        # Task dependencies column
+        try:
+            await self._conn.execute(
+                "ALTER TABLE tasks ADD COLUMN depends_on TEXT DEFAULT ''"
+            )
+            await self._conn.commit()
+        except Exception:
+            pass  # column already exists
 
     # ------------------------------------------------------------------
     # Introspection
@@ -230,10 +239,11 @@ class Database:
     # ------------------------------------------------------------------
 
     async def create_task(self, task: TaskData) -> int:
+        depends_on_str = ",".join(str(d) for d in task.depends_on) if task.depends_on else ""
         cursor = await self._conn.execute(
             """
-            INSERT INTO tasks (title, description, status, assigned_to, project, parent_task_id, result)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO tasks (title, description, status, assigned_to, project, parent_task_id, depends_on, result)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 task.title,
@@ -242,6 +252,7 @@ class Database:
                 task.assigned_to,
                 task.project,
                 task.parent_task_id,
+                depends_on_str,
                 task.result,
             ),
         )
@@ -250,6 +261,8 @@ class Database:
 
     def _row_to_task(self, row: aiosqlite.Row) -> TaskData:
         keys = row.keys() if hasattr(row, "keys") else []
+        depends_on_raw = row["depends_on"] if "depends_on" in keys else ""
+        depends_on = [int(x) for x in depends_on_raw.split(",") if x.strip()] if depends_on_raw else []
         return TaskData(
             id=row["id"],
             title=row["title"],
@@ -258,6 +271,7 @@ class Database:
             assigned_to=row["assigned_to"],
             project=row["project"],
             parent_task_id=row["parent_task_id"],
+            depends_on=depends_on,
             result=row["result"],
             created_at=row["created_at"] if "created_at" in keys else None,
             updated_at=row["updated_at"] if "updated_at" in keys else None,
@@ -364,6 +378,46 @@ class Database:
         total = row["total"]
         done = row["done"] or 0
         return total > 0 and total == done
+
+    async def dependencies_met(self, task: TaskData) -> bool:
+        """Check if all tasks in depends_on are DONE."""
+        if not task.depends_on:
+            return True
+        placeholders = ",".join("?" * len(task.depends_on))
+        cursor = await self._conn.execute(
+            f"SELECT COUNT(*) as total, "
+            f"SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) as done "
+            f"FROM tasks WHERE id IN ({placeholders})",
+            task.depends_on,
+        )
+        row = await cursor.fetchone()
+        total = row["total"]
+        done = row["done"] or 0
+        return total == len(task.depends_on) and total == done
+
+    async def get_blocked_tasks(self) -> list[TaskData]:
+        """Get OPEN tasks that have dependencies (for dependency-check loop)."""
+        cursor = await self._conn.execute(
+            "SELECT * FROM tasks WHERE status = 'open' AND depends_on != '' AND depends_on IS NOT NULL"
+        )
+        rows = await cursor.fetchall()
+        return [self._row_to_task(r) for r in rows]
+
+    async def get_dependency_results(self, task: TaskData) -> str:
+        """Collect results from dependency tasks as context."""
+        if not task.depends_on:
+            return ""
+        placeholders = ",".join("?" * len(task.depends_on))
+        cursor = await self._conn.execute(
+            f"SELECT id, title, result FROM tasks WHERE id IN ({placeholders}) ORDER BY id",
+            task.depends_on,
+        )
+        rows = await cursor.fetchall()
+        parts = []
+        for r in rows:
+            result_text = (r["result"] or "Kein Ergebnis")[:2000]
+            parts.append(f"### Task #{r['id']}: {r['title']}\n{result_text}")
+        return "\n\n".join(parts)
 
     async def get_all_tasks(self, limit: int = 50, offset: int = 0,
                             status: str | None = None, agent: str | None = None,

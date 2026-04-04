@@ -51,13 +51,14 @@ class LLMClient:
             self.num_ctx = settings.ollama_num_ctx
             self.num_ctx_extended = settings.ollama_num_ctx_extended
 
-    def _build_options(self, temperature: float | None = None) -> dict:
-        """Build Ollama options. Note: num_predict and num_ctx removed —
+    def _build_options(self, temperature: float | None = None,
+                       num_ctx: int | None = None) -> dict:
+        """Build Ollama options. Note: num_predict removed —
         Gemma 4 via ollama 0.6+ returns empty with explicit num_predict."""
-        opts = {}
+        opts = {"num_ctx": num_ctx or self.num_ctx}
         if temperature is not None:
             opts["temperature"] = temperature
-        return opts or None
+        return opts
 
     @staticmethod
     def _clean_history(messages: list[dict]) -> list[dict]:

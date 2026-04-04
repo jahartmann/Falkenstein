@@ -2,12 +2,16 @@
 import os
 from pathlib import Path
 
+from dotenv import load_dotenv
 from pydantic_settings import BaseSettings
 
+# Load .env so os.getenv works for bootstrap values
+load_dotenv()
+
 # Bootstrap (used before DB is available)
-PORT = int(os.getenv("PORT", "8800"))
+PORT = int(os.getenv("PORT", os.getenv("FRONTEND_PORT", "8800")))
 DB_PATH = Path(os.getenv("DB_PATH", "./data/falkenstein.db"))
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", os.getenv("TELEGRAM_TOKEN", ""))
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
 

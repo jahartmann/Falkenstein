@@ -55,11 +55,15 @@ def test_clean_history_preserves_tool_messages():
 
 def test_build_options_with_temperature():
     llm = LLMClient.__new__(LLMClient)
+    llm.num_ctx = 16384
     opts = llm._build_options(temperature=0.5)
     assert opts["temperature"] == 0.5
+    assert opts["num_ctx"] == 16384
 
 
-def test_build_options_empty_returns_none():
+def test_build_options_always_includes_num_ctx():
     llm = LLMClient.__new__(LLMClient)
+    llm.num_ctx = 32768
     opts = llm._build_options()
-    assert opts is None
+    assert opts is not None
+    assert opts["num_ctx"] == 32768

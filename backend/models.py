@@ -59,6 +59,7 @@ class TaskData(BaseModel):
     assigned_to: str | None = None
     project: str | None = None
     parent_task_id: int | None = None
+    depends_on: list[int] = []  # task IDs that must be DONE before this runs
     result: str | None = None
     created_at: str | None = None
     updated_at: str | None = None
