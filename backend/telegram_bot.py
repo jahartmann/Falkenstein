@@ -1,14 +1,13 @@
 import asyncio
 import httpx
-from backend.config import settings
 
 
 class TelegramBot:
     """Telegram Bot — thin transport layer. All logic is in MainAgent."""
 
-    def __init__(self):
-        self.token = settings.telegram_bot_token
-        self.chat_id = settings.telegram_chat_id
+    def __init__(self, token: str = "", chat_id: str = ""):
+        self.token = token
+        self.chat_id = chat_id
         self.base_url = f"https://api.telegram.org/bot{self.token}"
         self._offset: int = 0
         self._handlers: list = []

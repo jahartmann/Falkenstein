@@ -5,18 +5,12 @@ from backend.telegram_bot import TelegramBot
 
 @pytest.fixture
 def bot():
-    with patch("backend.telegram_bot.settings") as mock_settings:
-        mock_settings.telegram_bot_token = "test-token-123"
-        mock_settings.telegram_chat_id = "12345"
-        return TelegramBot()
+    return TelegramBot(token="test-token-123", chat_id="12345")
 
 
 @pytest.fixture
 def disabled_bot():
-    with patch("backend.telegram_bot.settings") as mock_settings:
-        mock_settings.telegram_bot_token = ""
-        mock_settings.telegram_chat_id = ""
-        return TelegramBot()
+    return TelegramBot(token="", chat_id="")
 
 
 def test_enabled(bot):
@@ -109,5 +103,3 @@ def test_on_message_handler(bot):
     handler = AsyncMock()
     bot.on_message(handler)
     assert handler in bot._handlers
-
-

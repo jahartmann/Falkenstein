@@ -2,8 +2,6 @@ import asyncio
 import json
 import re
 from ollama import chat as ollama_chat
-from backend.config import settings
-
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 
 
@@ -35,13 +33,23 @@ def _get_message(response) -> dict:
 
 
 class LLMClient:
-    def __init__(self):
-        self.model = settings.ollama_model
-        self.model_light = settings.model_light
-        self.model_heavy = settings.model_heavy
-        self.host = settings.ollama_host
-        self.num_ctx = settings.ollama_num_ctx
-        self.num_ctx_extended = settings.ollama_num_ctx_extended
+    def __init__(self, config: dict | None = None):
+        if config:
+            self.model = config.get("ollama_model", "gemma4:26b")
+            self.model_light = config.get("ollama_model_light", "") or self.model
+            self.model_heavy = config.get("ollama_model_heavy", "") or self.model
+            self.host = config.get("ollama_host", "http://localhost:11434")
+            self.num_ctx = int(config.get("ollama_num_ctx", "16384"))
+            self.num_ctx_extended = int(config.get("ollama_num_ctx_extended", "32768"))
+        else:
+            # Fallback to legacy settings for backward compatibility
+            from backend.config import settings
+            self.model = settings.ollama_model
+            self.model_light = settings.model_light
+            self.model_heavy = settings.model_heavy
+            self.host = settings.ollama_host
+            self.num_ctx = settings.ollama_num_ctx
+            self.num_ctx_extended = settings.ollama_num_ctx_extended
 
     def _build_options(self, temperature: float | None = None) -> dict:
         """Build Ollama options. Note: num_predict and num_ctx removed —

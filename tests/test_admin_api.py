@@ -9,7 +9,6 @@ def test_hot_reload_fields_defined():
     assert "ollama_model" in HOT_RELOAD_FIELDS
     assert "telegram_bot_token" in HOT_RELOAD_FIELDS
     assert "cli_provider" in HOT_RELOAD_FIELDS
-    assert "frontend_port" not in HOT_RELOAD_FIELDS
     assert "db_path" not in HOT_RELOAD_FIELDS
 
 

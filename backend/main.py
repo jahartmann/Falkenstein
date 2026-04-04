@@ -6,7 +6,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from backend.config import DB_PATH, PORT, settings
+from backend.config import DB_PATH, PORT, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID
 from backend.config_service import ConfigService
 from backend.admin_api import router as admin_router
 from backend import admin_api
@@ -76,8 +76,9 @@ async def lifespan(app: FastAPI):
     fact_memory = FactMemory(db)
     await fact_memory.init()
 
-    # 4. LLM + Router (LLMClient still reads from legacy settings)
-    llm = LLMClient()
+    # 4. LLM + Router (config from ConfigService)
+    llm_config = config_service.get_category("llm")
+    llm = LLMClient(config=llm_config)
     llm_router = LLMRouter(local_llm=llm)
 
     # 5. Tools (use config_service for paths)
@@ -110,7 +111,7 @@ async def lifespan(app: FastAPI):
     obsidian_writer = ObsidianWriter(vault_path=vault_path)
 
     # 7. Telegram
-    telegram = TelegramBot()
+    telegram = TelegramBot(token=TELEGRAM_TOKEN, chat_id=TELEGRAM_CHAT_ID)
 
     # 8. Scheduler (DB-backed)
     scheduler = Scheduler(db)
