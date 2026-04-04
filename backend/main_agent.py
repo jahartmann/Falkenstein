@@ -57,7 +57,7 @@ _CLASSIFY_SYSTEM = (
 
 
 class MainAgent:
-    def __init__(self, llm, tools, db, obsidian_writer: ObsidianWriter,
+    def __init__(self, llm, tools, db, obsidian_writer: ObsidianWriter | None = None,
                  telegram=None, ws_callback=None, fact_memory: FactMemory | None = None,
                  scheduler: Scheduler | None = None,
                  llm_router: LLMRouter | None = None,
@@ -484,21 +484,15 @@ class MainAgent:
 
     def _build_system_context(self) -> str:
         """Build system knowledge block so SubAgents know about the environment."""
-        vault = self.obsidian_writer.vault
-        schedules_dir = ""
-        if self.scheduler:
-            schedules_dir = str(self.scheduler.schedules_dir)
-        return (
-            f"## Systemwissen\n"
-            f"- Obsidian Vault: {vault}\n"
-            f"- Schedules-Verzeichnis: {schedules_dir}\n"
-            f"- Schedule-Format: YAML-Frontmatter (name, schedule, agent, active, active_hours) + Prompt-Body\n"
-            f"- Kanban: {self.obsidian_writer.kanban_path}\n"
-            f"- Inbox: {self.obsidian_writer.inbox_path}\n"
-            f"- Konfiguration: .env im Projektverzeichnis\n"
-            f"- Du kannst Dateien direkt lesen und schreiben mit deinen Tools.\n"
-            f"- Wenn du etwas nicht weißt oder keinen Zugriff hast, frag den Nutzer.\n"
-        )
+        parts = []
+        if self.config_service:
+            vault = self.config_service.get("obsidian_vault_path", "")
+            if vault:
+                parts.append(f"Obsidian Vault: {vault}")
+        elif self.obsidian_writer and hasattr(self.obsidian_writer, "vault"):
+            parts.append(f"Obsidian Vault: {self.obsidian_writer.vault}")
+        parts.append("Ergebnisse werden automatisch in Obsidian gespeichert.")
+        return "\n".join(parts)
 
     async def _handle_action(self, classification: dict, original_text: str, chat_id: str, project: str | None = None):
         """Handle action tasks — execute and report back, NO Obsidian report."""
@@ -578,6 +572,14 @@ class MainAgent:
             if self.telegram:
                 await self.telegram.send_message(error_msg[:4000], chat_id=chat_id or None)
 
+    def _obsidian_enabled(self) -> bool:
+        """Check if Obsidian writing is enabled and available."""
+        if not self.obsidian_writer:
+            return False
+        if self.config_service and not self.config_service.get_bool("obsidian_enabled"):
+            return False
+        return True
+
     async def _handle_content(self, classification: dict, original_text: str, chat_id: str, project: str | None = None):
         """Handle content tasks — research/write and save result to Obsidian."""
         try:
@@ -585,15 +587,11 @@ class MainAgent:
             result_type = classification.get("result_type", "report")
             title = classification.get("title", original_text[:80])
 
+            # 1. Create DB task
             task = TaskData(title=title, description=original_text, status=TaskStatus.OPEN)
             task_id = await self.db.create_task(task)
 
-            task_path = self.obsidian_writer.create_task_note(
-                title=title, typ=result_type, agent=agent_type,
-            )
-            self.obsidian_writer.kanban_move(title, "backlog")
-            self.obsidian_writer.remove_from_inbox(original_text)
-
+            # 2. Send confirmation to Telegram
             if self.telegram:
                 await self.telegram.send_message(
                     f"👍 Arbeite daran: {title}\n🤖 Agent: {agent_type}",
@@ -601,9 +599,8 @@ class MainAgent:
                 )
 
             await self.db.update_task_status(task_id, TaskStatus.IN_PROGRESS, agent_type)
-            self.obsidian_writer.kanban_move(title, "in_progress")
-            self.obsidian_writer.update_task_status(task_path, "in_progress")
 
+            # 3. Run SubAgent
             sys_context = self._build_system_context()
             enriched_desc = (
                 f"{sys_context}\n"
@@ -633,15 +630,21 @@ class MainAgent:
             try:
                 result = await sub.run()
 
-                self.obsidian_writer.write_result(
-                    title=title, typ=result_type, content=result, project=project,
-                )
-
+                # 4. Update DB with result
                 await self.db.update_task_result(task_id, result[:5000])
                 await self.db.update_task_status(task_id, TaskStatus.DONE)
-                self.obsidian_writer.kanban_move(title, "done")
-                self.obsidian_writer.update_task_status(task_path, "done")
 
+                # 5. Write result to Obsidian if enabled
+                if self._obsidian_enabled():
+                    try:
+                        await asyncio.to_thread(
+                            self.obsidian_writer.write_result,
+                            title=title, typ=result_type, content=result, project=project,
+                        )
+                    except Exception as e:
+                        print(f"Obsidian write failed: {e}")
+
+                # 6. Send result to Telegram
                 if self.telegram:
                     summary = result[:500] if len(result) <= 500 else result[:497] + "..."
                     await self.telegram.send_message(
@@ -649,6 +652,7 @@ class MainAgent:
                         chat_id=chat_id or None,
                     )
 
+                # 7. Broadcast WS event
                 if self.ws_callback:
                     await self.ws_callback({
                         "type": "agent_done", "agent_id": sub.agent_id,
@@ -694,12 +698,15 @@ class MainAgent:
             # Suppress Telegram and Obsidian — silent success
             return
 
-        # Write result to Obsidian
-        self.obsidian_writer.write_result(
-            title=task_name,
-            typ="report",
-            content=result,
-        )
+        # Write result to Obsidian if enabled
+        if self._obsidian_enabled():
+            try:
+                await asyncio.to_thread(
+                    self.obsidian_writer.write_result,
+                    title=task_name, typ="report", content=result,
+                )
+            except Exception as e:
+                print(f"Obsidian write failed: {e}")
 
         # Send Telegram summary
         if self.telegram:

@@ -30,10 +30,8 @@ def mock_db():
 @pytest.fixture
 def mock_obsidian_writer():
     writer = MagicMock()
-    writer.create_task_note = MagicMock(return_value=MagicMock())
-    writer.kanban_move = MagicMock()
+    writer.vault = "/tmp/test-vault"
     writer.write_result = MagicMock(return_value=MagicMock())
-    writer.update_task_status = MagicMock()
     return writer
 
 
@@ -107,7 +105,6 @@ async def test_action_no_obsidian_report(agent, mock_llm, mock_telegram, mock_db
         # Background task needs a tick to run
         await asyncio.sleep(0.1)
     mock_obsidian_writer.write_result.assert_not_called()
-    mock_obsidian_writer.create_task_note.assert_not_called()
     assert mock_telegram.send_message.call_count >= 1
     sent = mock_telegram.send_message.call_args[0][0]
     assert "Erledigt" in sent
