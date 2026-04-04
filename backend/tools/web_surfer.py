@@ -15,9 +15,10 @@ class WebSurferTool(Tool):
 
     BRAVE_URL = "https://api.search.brave.com/res/v1/web/search"
 
-    def __init__(self, max_results: int = 3, max_text_length: int = 3000):
+    def __init__(self, max_results: int = 5, max_text_length: int = 8000, config_service=None):
         self.max_results = max_results
         self.max_text_length = max_text_length
+        self._config_service = config_service
 
     async def execute(self, params: dict) -> ToolResult:
         action = params.get("action", "research")
@@ -52,7 +53,12 @@ class WebSurferTool(Tool):
             return ToolResult(success=False, output=f"Suchfehler: {e}")
 
     async def _do_search(self, query: str) -> list[dict]:
-        api_key = settings.brave_api_key
+        # Prefer runtime config from DB, fallback to .env settings
+        api_key = ""
+        if self._config_service:
+            api_key = self._config_service.get("brave_api_key", "")
+        if not api_key:
+            api_key = settings.brave_api_key
         if not api_key:
             return []
         async with httpx.AsyncClient(timeout=15) as client:
@@ -97,31 +103,37 @@ class WebSurferTool(Tool):
         return "\n".join(lines)
 
     async def _research_pipeline(self, query: str) -> ToolResult:
-        # Single search call — reuse results for snippets and scraping
         results = await self._do_search(query)
         if not results:
             return ToolResult(success=False, output="Keine Suchergebnisse.")
 
-        best_url = results[0]["url"]
-        scrape_result = await self._scrape(best_url)
+        # Scrape top 3 results in parallel, pick the best (longest) text
+        scrape_tasks = [self._scrape(r["url"]) for r in results[:3]]
+        scrape_results = await asyncio.gather(*scrape_tasks, return_exceptions=True)
 
-        snippets = "\n".join(f"- {r['description']}" for r in results)
-        if scrape_result.success:
+        best_text = ""
+        best_url = ""
+        for i, sr in enumerate(scrape_results):
+            if isinstance(sr, ToolResult) and sr.success and len(sr.output) > len(best_text):
+                best_text = sr.output
+                best_url = results[i]["url"]
+
+        snippets = "\n".join(f"- {r['title']}: {r['description']}" for r in results)
+        if best_text:
             output = (
                 f"Quelle: {best_url}\n\n"
-                f"--- Haupttext ---\n{scrape_result.output}\n\n"
+                f"--- Haupttext ---\n{best_text}\n\n"
                 f"--- Weitere Treffer ---\n{snippets}\n\n"
                 f"Quellen:\n" +
                 "\n".join(f"[{r['title']}]({r['url']})" for r in results)
             )
         else:
             output = (
-                f"Scraping fehlgeschlagen, aber Snippets verfügbar:\n\n"
-                f"{snippets}\n\n"
+                f"Scraping fehlgeschlagen, Snippets:\n\n{snippets}\n\n"
                 f"Quellen:\n" +
                 "\n".join(f"[{r['title']}]({r['url']})" for r in results)
             )
-        return ToolResult(success=True, output=output[:self.max_text_length * 2])
+        return ToolResult(success=True, output=output[:self.max_text_length * 3])
 
     def schema(self) -> dict:
         return {
