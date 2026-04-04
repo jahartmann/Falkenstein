@@ -302,6 +302,65 @@ class Database:
         done = row["done"] or 0
         return total > 0 and total == done
 
+    async def get_all_tasks(self, limit: int = 50, offset: int = 0,
+                            status: str | None = None, agent: str | None = None,
+                            search: str | None = None) -> list[TaskData]:
+        """Get tasks with optional filters, ordered by created_at DESC."""
+        query = "SELECT * FROM tasks WHERE 1=1"
+        params: list = []
+        if status:
+            query += " AND status = ?"
+            params.append(status)
+        if agent:
+            query += " AND assigned_to = ?"
+            params.append(agent)
+        if search:
+            query += " AND (title LIKE ? OR description LIKE ?)"
+            params.extend([f"%{search}%", f"%{search}%"])
+        query += " ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+        async with self._conn.execute(query, params) as cur:
+            rows = await cur.fetchall()
+        return [self._row_to_task(r) for r in rows]
+
+    async def get_task_count(self, status: str | None = None,
+                             agent: str | None = None,
+                             search: str | None = None) -> int:
+        """Count tasks matching filters."""
+        query = "SELECT COUNT(*) FROM tasks WHERE 1=1"
+        params: list = []
+        if status:
+            query += " AND status = ?"
+            params.append(status)
+        if agent:
+            query += " AND assigned_to = ?"
+            params.append(agent)
+        if search:
+            query += " AND (title LIKE ? OR description LIKE ?)"
+            params.extend([f"%{search}%", f"%{search}%"])
+        async with self._conn.execute(query, params) as cur:
+            row = await cur.fetchone()
+        return row[0] if row else 0
+
+    async def delete_task(self, task_id: int) -> bool:
+        """Delete a task by ID. Returns True if deleted."""
+        async with self._conn.execute(
+            "DELETE FROM tasks WHERE id = ?", (task_id,)
+        ) as cur:
+            deleted = cur.rowcount > 0
+        await self._conn.commit()
+        return deleted
+
+    async def update_task_status_manual(self, task_id: int, status: TaskStatus) -> bool:
+        """Manually update task status (from dashboard)."""
+        async with self._conn.execute(
+            "UPDATE tasks SET status = ?, updated_at = datetime('now') WHERE id = ?",
+            (status.value, task_id),
+        ) as cur:
+            updated = cur.rowcount > 0
+        await self._conn.commit()
+        return updated
+
     # ------------------------------------------------------------------
     # Messages
     # ------------------------------------------------------------------
