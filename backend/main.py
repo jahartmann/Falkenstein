@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 from backend.config import settings
 from backend.admin_api import router as admin_router
 from backend.database import Database
@@ -23,62 +24,66 @@ from backend.tools.code_executor import CodeExecutorTool
 from backend.tools.obsidian_manager import ObsidianManagerTool
 from backend.tools.cli_bridge import CLIBridgeTool, CLIBudgetTracker
 from backend.tools.vision import VisionTool
+from backend.tools.system_shell import SystemShellTool
+from backend.tools.ollama_manager import OllamaManagerTool
+from backend.tools.self_config import SelfConfigTool
+from backend.memory.fact_memory import FactMemory
+from backend.llm_router import LLMRouter
 
 db: Database = None
+fact_memory: FactMemory = None
 ws_mgr = WSManager()
 telegram: TelegramBot = None
 main_agent: MainAgent = None
 budget_tracker: CLIBudgetTracker = None
+llm_router: LLMRouter = None
 telegram_task: asyncio.Task = None
 watcher_task: asyncio.Task = None
 scheduler: Scheduler = None
 scheduler_task: asyncio.Task = None
 
+# External agents (Claude Code subagents etc.) — TTL-based, auto-expire after 60s
+_external_agents: dict[str, dict] = {}
+
+
+class ExternalAgentIn(BaseModel):
+    id: str
+    name: str = ""
+    type: str = "external"  # coder, researcher, writer, ops, external
+    task: str = ""
+
 
 async def handle_telegram_message(msg: dict):
-    """All Telegram messages go through MainAgent."""
+    """All Telegram messages go through MainAgent — including /commands."""
     text = msg["text"].strip()
     chat_id = msg.get("chat_id", "")
-
-    if text.startswith("/status"):
-        status = main_agent.get_status()
-        agents = status["active_agents"]
-        if not agents:
-            await telegram.send_message("💤 Keine aktiven Agents.", chat_id=chat_id)
-        else:
-            lines = ["🏢 *Aktive Agents:*"]
-            for a in agents:
-                lines.append(f"  🤖 {a['type']}: {a['task']}")
-            await telegram.send_message("\n".join(lines), chat_id=chat_id)
-    elif text.startswith("/stop"):
-        await telegram.send_message("⏹ Stop noch nicht implementiert.", chat_id=chat_id)
-    elif text.startswith("/start") or text.startswith("/help"):
-        await telegram.send_message(
-            "🏢 *Falkenstein Assistent*\n\n"
-            "Schick mir einfach eine Nachricht oder Aufgabe.\n\n"
-            "/status — Aktive Agents\n"
-            "/stop — Task abbrechen",
-            chat_id=chat_id,
-        )
-    else:
-        await main_agent.handle_message(text, chat_id=chat_id)
+    await main_agent.handle_message(text, chat_id=chat_id)
 
 
-async def handle_obsidian_todo(content: str, source_file: str):
+async def handle_obsidian_todo(todo: dict):
     """New todo from Obsidian Inbox -> MainAgent."""
-    await main_agent.handle_message(content)
+    await main_agent.handle_message(
+        todo["content"],
+        agent_type_hint=todo.get("agent_type"),
+        project_hint=todo.get("project"),
+    )
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global db, telegram, telegram_task, main_agent, budget_tracker, watcher_task, scheduler, scheduler_task
+    global db, telegram, telegram_task, main_agent, budget_tracker, watcher_task, scheduler, scheduler_task, fact_memory, llm_router
 
     # Database
     db = Database(settings.db_path)
     await db.init()
 
-    # LLM
+    # Fact Memory
+    fact_memory = FactMemory(db)
+    await fact_memory.init()
+
+    # LLM + Router
     llm = LLMClient()
+    llm_router = LLMRouter(local_llm=llm)
 
     # Tools
     tools = ToolRegistry()
@@ -95,6 +100,10 @@ async def lifespan(app: FastAPI):
         provider=settings.cli_provider,
     ))
     tools.register(VisionTool(workspace_path=settings.workspace_path, llm=llm))
+    project_root = Path(__file__).parent.parent
+    tools.register(SystemShellTool())
+    tools.register(OllamaManagerTool())
+    tools.register(SelfConfigTool(project_path=project_root))
 
     # Obsidian Writer
     obsidian_writer = ObsidianWriter(vault_path=settings.obsidian_vault_path)
@@ -102,7 +111,12 @@ async def lifespan(app: FastAPI):
     # Telegram
     telegram = TelegramBot()
 
-    # MainAgent
+    # Scheduler (create early so MainAgent can reference it)
+    scheduler = None
+    if settings.obsidian_vault_path.exists():
+        scheduler = Scheduler(vault_path=settings.obsidian_vault_path)
+
+    # MainAgent (Falki)
     main_agent = MainAgent(
         llm=llm,
         tools=tools,
@@ -110,6 +124,9 @@ async def lifespan(app: FastAPI):
         obsidian_writer=obsidian_writer,
         telegram=telegram if telegram.enabled else None,
         ws_callback=ws_mgr.broadcast,
+        fact_memory=fact_memory,
+        scheduler=scheduler,
+        llm_router=llm_router,
     )
 
     # Start Telegram polling
@@ -128,8 +145,7 @@ async def lifespan(app: FastAPI):
         print("Obsidian watcher active")
 
     # Start Scheduler
-    if settings.obsidian_vault_path.exists():
-        scheduler = Scheduler(vault_path=settings.obsidian_vault_path)
+    if scheduler:
         scheduler_task = asyncio.create_task(
             scheduler.start(on_task_due=main_agent.handle_scheduled)
         )
@@ -138,7 +154,7 @@ async def lifespan(app: FastAPI):
     from backend import admin_api
     admin_api.init(start_time=_time.time())
 
-    print(f"Falkenstein running on port {settings.frontend_port}")
+    print(f"Falki running on port {settings.frontend_port}")
     yield
 
     # Shutdown
@@ -251,6 +267,46 @@ async def get_budget():
         "budget": budget_tracker.daily_budget,
         "remaining": budget_tracker.remaining,
     }
+
+
+@app.post("/api/agents/external")
+async def register_external_agent(agent: ExternalAgentIn):
+    """Register or heartbeat an external agent (Claude Code, etc.). TTL=60s."""
+    _external_agents[agent.id] = {
+        "id": agent.id,
+        "name": agent.name,
+        "type": agent.type,
+        "task": agent.task,
+        "ts": _time.time(),
+    }
+    # Broadcast to WS clients
+    if ws_mgr and agent.id not in (main_agent.active_agents if main_agent else {}):
+        await ws_mgr.broadcast({
+            "type": "agent_spawned",
+            "agent_id": agent.id,
+            "agent_type": agent.type,
+            "task": agent.task or agent.name,
+        })
+    return {"status": "ok"}
+
+
+@app.delete("/api/agents/external/{agent_id}")
+async def unregister_external_agent(agent_id: str):
+    """Remove an external agent."""
+    _external_agents.pop(agent_id, None)
+    if ws_mgr:
+        await ws_mgr.broadcast({"type": "agent_done", "agent_id": agent_id})
+    return {"status": "ok"}
+
+
+@app.get("/api/agents/external")
+async def get_external_agents():
+    """Get active external agents, pruning expired ones (TTL 60s)."""
+    now = _time.time()
+    expired = [k for k, v in _external_agents.items() if now - v["ts"] > 60]
+    for k in expired:
+        _external_agents.pop(k, None)
+    return {"agents": list(_external_agents.values())}
 
 
 if __name__ == "__main__":
