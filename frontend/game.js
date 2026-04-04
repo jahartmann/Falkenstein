@@ -53,12 +53,12 @@ function create() {
     // Passive agent display
     agentDisplay = new AgentDisplay(scene);
 
-    // Camera — centered on map, mouse-drag pan
-    const mapCenterX = map.widthInPixels / 2;
-    const mapCenterY = map.heightInPixels / 2;
+    // Camera — centered on main agent position, mouse-drag pan
+    const mainAgentX = MAIN_AGENT_POS.x * TILE + TILE / 2;
+    const mainAgentY = MAIN_AGENT_POS.y * TILE + TILE / 2;
     this.cameras.main.setBounds(0, 0, map.widthInPixels, map.heightInPixels);
-    this.cameras.main.centerOn(mapCenterX, mapCenterY);
-    this.cameras.main.setZoom(2);
+    this.cameras.main.centerOn(mainAgentX, mainAgentY);
+    this.cameras.main.setZoom(1.5);
 
     // Mouse wheel zoom
     this.input.on('wheel', (p, go, dx, dy) => {

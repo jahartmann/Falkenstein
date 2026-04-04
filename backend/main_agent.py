@@ -32,9 +32,33 @@ class MainAgent:
         self._chat_history: dict[str, list[dict]] = {}
         self._max_history = 20
 
+    async def _build_context(self) -> str:
+        """Build system context with current status for the classify prompt."""
+        lines = []
+        # Active agents
+        active = self.active_agents
+        if active:
+            agents_str = ", ".join(f"{v['type']}: {v['task']}" for v in active.values())
+            lines.append(f"Aktive Agents: {agents_str}")
+        else:
+            lines.append("Aktive Agents: keine")
+        # Open tasks from DB
+        try:
+            open_tasks = await self.db.get_open_tasks()
+            if open_tasks:
+                tasks_str = ", ".join(f"#{t.id} {t.title} ({t.status.value})" for t in open_tasks[:10])
+                lines.append(f"Offene Tasks ({len(open_tasks)}): {tasks_str}")
+            else:
+                lines.append("Offene Tasks: keine")
+        except Exception:
+            lines.append("Offene Tasks: DB nicht verfügbar")
+        return "\n".join(lines)
+
     async def classify(self, message: str) -> dict:
+        context = await self._build_context()
+        system = _CLASSIFY_SYSTEM + f"\n\n## Aktueller System-Status\n{context}"
         response = await self.llm.chat(
-            system_prompt=_CLASSIFY_SYSTEM,
+            system_prompt=system,
             messages=[{"role": "user", "content": message}],
             temperature=0.1,
         )
