@@ -1,3 +1,5 @@
+import { PlayerEntity } from './player.js';
+
 const TILESET_MAP = {
   'Room_Builder_Office_48x48': 'tiles_room',
   'Modern_Office_Black_Shadow': 'tiles_shadow',
@@ -131,5 +133,15 @@ export class OfficeScene extends Phaser.Scene {
     this.cameras.main.setBounds(0, 0, bounds.width, bounds.height);
     this.cameras.main.setZoom(1);
     this.cameras.main.centerOn(bounds.width / 2, bounds.height / 2);
+
+    const spawnRoom = this.tilemap.rooms.find(r => r.name === 'Gemeinschaftsraum') || this.tilemap.rooms[0];
+    const spawnX = spawnRoom ? spawnRoom.centerX : 30;
+    const spawnY = spawnRoom ? spawnRoom.centerY : 24;
+    this.player = new PlayerEntity(this, this.tilemap);
+    this.player.create(spawnX, spawnY);
+  }
+
+  update(time, delta) {
+    if (this.player) this.player.update();
   }
 }
