@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 OllamaManagerTool — manage Ollama models and server directly.
 Actions: list, pull, remove, show, ps, status.

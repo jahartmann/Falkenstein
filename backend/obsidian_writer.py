@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 # backend/obsidian_writer.py
 """Writes knowledge artifacts to Obsidian vault."""
 

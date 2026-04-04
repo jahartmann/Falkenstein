@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 SystemShellTool — runs shell commands anywhere on the system.
 Unlike ShellRunnerTool (workspace-only), this can operate in any directory.

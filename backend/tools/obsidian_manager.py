@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import datetime
 from pathlib import Path
 from backend.tools.base import Tool, ToolResult

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 CLILLMClient — same interface as LLMClient, but uses Claude/Gemini CLI as backend.
 Supports chat() and chat_with_tools() by passing tool schemas in the prompt
