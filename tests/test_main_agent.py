@@ -106,8 +106,9 @@ async def test_action_no_obsidian_report(agent, mock_llm, mock_telegram, mock_db
         # Background task needs a tick to run
         await asyncio.sleep(0.1)
     mock_obsidian_writer.write_result.assert_not_called()
-    assert mock_telegram.send_message.call_count >= 1
-    sent = mock_telegram.send_message.call_args[0][0]
+    # Completion message goes via send_message_with_buttons; confirmation via send_message
+    assert mock_telegram.send_message_with_buttons.call_count >= 1
+    sent = mock_telegram.send_message_with_buttons.call_args[0][0]
     assert "Erledigt" in sent
 
 

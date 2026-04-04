@@ -224,6 +224,19 @@ class MainAgent:
             lines.append(f"  - {title}")
         return "\n".join(lines)
 
+    async def _cmd_task(self, args: str, chat_id: str) -> str:
+        tid = args.strip()
+        if not tid:
+            return "Nutzung: /task <ID>"
+        try:
+            task = await self.db.get_task(int(tid))
+            if not task:
+                return f"Task #{tid} nicht gefunden."
+            result_preview = (task.result or "Kein Ergebnis")[:1500]
+            return f"*Task #{task.id}: {task.title}*\nStatus: {task.status.value}\n\n{result_preview}"
+        except Exception as e:
+            return f"Fehler: {e}"
+
     async def _cmd_memory(self, chat_id: str) -> str:
         if not self.fact_memory:
             return "Memory-System nicht aktiv."
@@ -464,6 +477,7 @@ class MainAgent:
             "/memory": lambda: self._cmd_memory(chat_id),
             "/schedule": lambda: self._cmd_schedule(args, chat_id),
             "/cancel": lambda: self._cmd_cancel(args, chat_id),
+            "/task": lambda: self._cmd_task(args, chat_id),
         }
         handler = handlers.get(cmd)
         if handler:
@@ -616,11 +630,18 @@ class MainAgent:
                 await self.db.update_task_status(task_id, TaskStatus.DONE)
 
                 if self.telegram:
-                    summary = result[:800] if len(result) <= 800 else result[:797] + "..."
-                    await self.telegram.send_message(
-                        f"✅ Erledigt: {title}\n\n{summary}",
-                        chat_id=chat_id or None,
-                    )
+                    summary = result[:500] + ("..." if len(result) > 500 else "")
+                    if hasattr(self.telegram, 'send_message_with_buttons'):
+                        await self.telegram.send_message_with_buttons(
+                            f"✅ Erledigt: {title}\n\n{summary}",
+                            [[{"text": "📋 Details", "callback_data": f"/task {task_id}"}]],
+                            chat_id=chat_id or None,
+                        )
+                    else:
+                        await self.telegram.send_message(
+                            f"✅ Erledigt: {title}\n\n{summary}",
+                            chat_id=chat_id or None,
+                        )
 
                 if self.ws_callback:
                     await self.ws_callback({
@@ -723,11 +744,18 @@ class MainAgent:
 
                 # 6. Send result to Telegram
                 if self.telegram:
-                    summary = result[:500] if len(result) <= 500 else result[:497] + "..."
-                    await self.telegram.send_message(
-                        f"✅ Fertig: {title}\n\n{summary}\n\n📁 Ergebnis in Obsidian",
-                        chat_id=chat_id or None,
-                    )
+                    summary = result[:500] + ("..." if len(result) > 500 else "")
+                    if hasattr(self.telegram, 'send_message_with_buttons'):
+                        await self.telegram.send_message_with_buttons(
+                            f"✅ Fertig: {title}\n\n{summary}\n\n📁 Ergebnis in Obsidian",
+                            [[{"text": "📋 Details", "callback_data": f"/task {task_id}"}]],
+                            chat_id=chat_id or None,
+                        )
+                    else:
+                        await self.telegram.send_message(
+                            f"✅ Fertig: {title}\n\n{summary}\n\n📁 Ergebnis in Obsidian",
+                            chat_id=chat_id or None,
+                        )
 
                 # 7. Broadcast WS event
                 if self.ws_callback:

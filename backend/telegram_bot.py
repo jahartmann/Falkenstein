@@ -27,9 +27,44 @@ class TelegramBot:
         target = chat_id or self.chat_id
         try:
             async with httpx.AsyncClient(timeout=10) as client:
+                # Try with Markdown first
                 resp = await client.post(
                     f"{self.base_url}/sendMessage",
                     json={"chat_id": target, "text": text, "parse_mode": "Markdown"},
+                )
+                if resp.status_code == 200:
+                    return True
+                # Markdown parse error — retry without formatting
+                resp = await client.post(
+                    f"{self.base_url}/sendMessage",
+                    json={"chat_id": target, "text": text},
+                )
+                return resp.status_code == 200
+        except Exception:
+            return False
+
+    async def send_message_with_buttons(self, text: str, buttons: list[list[dict]],
+                                         chat_id: str | None = None) -> bool:
+        """Send message with inline keyboard. buttons: [[{"text": "Label", "callback_data": "data"}]]"""
+        if not self.enabled:
+            return False
+        target = chat_id or self.chat_id
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.post(
+                    f"{self.base_url}/sendMessage",
+                    json={
+                        "chat_id": target,
+                        "text": text,
+                        "reply_markup": {"inline_keyboard": buttons},
+                    },
+                )
+                if resp.status_code == 200:
+                    return True
+                # Fallback without buttons
+                resp = await client.post(
+                    f"{self.base_url}/sendMessage",
+                    json={"chat_id": target, "text": text},
                 )
                 return resp.status_code == 200
         except Exception:
@@ -60,6 +95,28 @@ class TelegramBot:
                             "chat_id": str(msg["chat"]["id"]),
                             "from": msg.get("from", {}).get("first_name", "Unknown"),
                         })
+                    # Handle callback queries (inline button presses)
+                    callback = update.get("callback_query", {})
+                    if callback:
+                        cb_data = callback.get("data", "")
+                        cb_chat = str(callback.get("message", {}).get("chat", {}).get("id", ""))
+                        if cb_data:
+                            messages.append({
+                                "text": cb_data,
+                                "chat_id": cb_chat,
+                                "from": callback.get("from", {}).get("first_name", "Unknown"),
+                                "is_callback": True,
+                            })
+                        # Answer callback to remove loading state
+                        cb_id = callback.get("id")
+                        if cb_id:
+                            try:
+                                await client.post(
+                                    f"{self.base_url}/answerCallbackQuery",
+                                    json={"callback_query_id": cb_id},
+                                )
+                            except Exception:
+                                pass
                 return messages
         except Exception:
             return []
