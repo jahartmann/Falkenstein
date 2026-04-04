@@ -226,9 +226,12 @@ class Scheduler:
         self.tasks.clear()
         if not self.schedules_dir.exists():
             self.schedules_dir.mkdir(parents=True, exist_ok=True)
-            self._create_default_heartbeat()
+        self._create_default_heartbeat()
+        self._create_schedule_template()
         last_runs = _load_last_runs(self._last_run_path)
         for path in sorted(self.schedules_dir.glob("*.md")):
+            if path.name.startswith("_"):
+                continue  # skip templates
             try:
                 task = ScheduledTask.from_file(path)
                 lr = last_runs.get(path.name)
@@ -359,5 +362,30 @@ class Scheduler:
             "- Wie ist der CLI-Budget-Stand?\n\n"
             "Wenn alles in Ordnung ist, antworte NUR mit: HEARTBEAT_OK\n"
             "Wenn es Probleme oder wichtige Updates gibt, erstelle einen kurzen Statusbericht.\n",
+            encoding="utf-8",
+        )
+
+    def _create_schedule_template(self):
+        """Create _vorlage.md template if it doesn't exist."""
+        tpl = self.schedules_dir / "_vorlage.md"
+        if tpl.exists():
+            return
+        tpl.write_text(
+            "---\n"
+            "name: Name des Jobs\n"
+            "schedule: täglich 09:00\n"
+            "agent: researcher\n"
+            "active: true\n"
+            "active_hours: 08:00-22:00\n"
+            "light_context: false\n"
+            "---\n\n"
+            "<!-- Schedule-Formate:\n"
+            "  täglich HH:MM | stündlich | alle N Minuten | alle N Stunden\n"
+            "  Mo-Fr HH:MM | montags HH:MM ... sonntags HH:MM\n"
+            "  wöchentlich TAG HH:MM | cron: EXPR\n"
+            "\n"
+            "  Agent-Typen: coder | researcher | writer | ops\n"
+            "-->\n\n"
+            "Dein Prompt hier. Was soll der Agent tun?\n",
             encoding="utf-8",
         )

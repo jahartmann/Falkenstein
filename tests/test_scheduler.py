@@ -148,7 +148,10 @@ def test_load_inactive_task(tmp_schedules):
 def test_scheduler_loads_all_tasks(tmp_schedules):
     scheduler = Scheduler(vault_path=tmp_schedules)
     scheduler.load_tasks()
-    assert len(scheduler.tasks) == 2
+    # heartbeat.md is always created by load_tasks, so 3 tasks total
+    assert len(scheduler.tasks) == 3
+    # template _vorlage.md must NOT be loaded
+    assert "_vorlage.md" not in scheduler.tasks
 
 
 def test_scheduler_due_tasks():
