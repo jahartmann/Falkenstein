@@ -17,6 +17,10 @@ from backend.telegram_bot import TelegramBot
 from backend.main_agent import MainAgent
 from backend.obsidian_writer import ObsidianWriter
 from backend.scheduler import Scheduler
+from backend.smart_scheduler import SmartScheduler
+from backend.memory.soul_memory import SoulMemory
+from backend.review_gate import ReviewGate
+from backend.intent_engine import IntentEngine
 from backend.tools.base import ToolRegistry
 from backend.tools.file_manager import FileManagerTool
 from backend.tools.web_surfer import WebSurferTool
@@ -33,13 +37,14 @@ from backend.llm_router import LLMRouter
 
 db: Database = None
 fact_memory: FactMemory = None
+soul_memory: SoulMemory = None
 ws_mgr = WSManager()
 telegram: TelegramBot = None
 main_agent: MainAgent = None
 budget_tracker: CLIBudgetTracker = None
 llm_router: LLMRouter = None
 telegram_task: asyncio.Task = None
-scheduler: Scheduler = None
+scheduler: SmartScheduler = None
 scheduler_task: asyncio.Task = None
 
 # External agents (Claude Code subagents etc.) — TTL-based, auto-expire after 60s
@@ -62,7 +67,7 @@ async def handle_telegram_message(msg: dict):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global db, telegram, telegram_task, main_agent, budget_tracker, scheduler, scheduler_task, fact_memory, llm_router
+    global db, telegram, telegram_task, main_agent, budget_tracker, scheduler, scheduler_task, fact_memory, soul_memory, llm_router
 
     # 1. Database
     db = Database(DB_PATH)
@@ -72,9 +77,19 @@ async def lifespan(app: FastAPI):
     config_service = ConfigService(db)
     await config_service.init()
 
-    # 3. Fact Memory
-    fact_memory = FactMemory(db)
-    await fact_memory.init()
+    # 3. Soul Memory (+ legacy fact migration)
+    soul_memory = SoulMemory(db)
+    await soul_memory.init()
+
+    try:
+        fact_memory = FactMemory(db)
+        await fact_memory.init()
+        if await fact_memory.count() > 0:
+            migrated = await soul_memory.migrate_from_facts(fact_memory)
+            if migrated:
+                print(f"Migrated {migrated} facts to SoulMemory")
+    except Exception:
+        fact_memory = None
 
     # 4. LLM + Router (config from ConfigService)
     llm_config = config_service.get_category("llm")
@@ -113,10 +128,14 @@ async def lifespan(app: FastAPI):
     # 7. Telegram
     telegram = TelegramBot(token=TELEGRAM_TOKEN, chat_id=TELEGRAM_CHAT_ID)
 
-    # 8. Scheduler (DB-backed)
-    scheduler = Scheduler(db)
+    # 8. Scheduler (DB-backed, smart)
+    scheduler = SmartScheduler(db)
 
-    # 9. MainAgent (Falki)
+    # 9. ReviewGate + IntentEngine
+    review_gate = ReviewGate(llm=llm)
+    intent_engine = IntentEngine(llm=llm)
+
+    # 10. MainAgent (Falki)
     main_agent = MainAgent(
         llm=llm,
         tools=tools,
@@ -124,13 +143,15 @@ async def lifespan(app: FastAPI):
         obsidian_writer=obsidian_writer,
         telegram=telegram if telegram.enabled else None,
         ws_callback=ws_mgr.broadcast,
-        fact_memory=fact_memory,
+        soul_memory=soul_memory,
+        review_gate=review_gate,
+        intent_engine=intent_engine,
         scheduler=scheduler,
         llm_router=llm_router,
         config_service=config_service,
     )
 
-    # 10. Wire admin API
+    # 11. Wire admin API
     admin_api.set_dependencies(
         db=db, scheduler=scheduler, config_service=config_service,
         main_agent=main_agent, budget_tracker=budget_tracker,
@@ -138,9 +159,25 @@ async def lifespan(app: FastAPI):
     )
     admin_api.init(start_time=_time.time())
 
-    # 11. Start Scheduler
+    # 12. Start Scheduler with reminder/step handlers
+    async def handle_reminder(reminder):
+        if telegram and telegram.enabled:
+            text = f"Erinnerung: {reminder['text']}"
+            await telegram.send_message(text, chat_id=reminder.get('chat_id'))
+            if reminder.get('follow_up'):
+                await telegram.send_message("Soll ich dazu was machen?", chat_id=reminder.get('chat_id'))
+
+    async def handle_step(step):
+        await main_agent.handle_message(
+            step['agent_prompt'], chat_id=step.get('chat_id', ''),
+        )
+
     scheduler_task = asyncio.create_task(
-        scheduler.start(on_task_due=main_agent.handle_scheduled)
+        scheduler.start(
+            on_task_due=main_agent.handle_scheduled,
+            on_reminder_due=handle_reminder,
+            on_step_due=handle_step,
+        )
     )
     print("Scheduler active")
 

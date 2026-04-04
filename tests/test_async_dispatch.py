@@ -74,7 +74,7 @@ async def test_handle_message_returns_quickly_for_action(agent, mock_llm):
     }
     mock_llm.chat = AsyncMock(return_value=json.dumps(classification))
 
-    with patch("backend.main_agent.SubAgent") as MockSub:
+    with patch("backend.main_agent.DynamicAgent") as MockSub:
         instance = AsyncMock()
         instance.run = _slow_run
         instance.agent_id = "test-123"
@@ -98,7 +98,7 @@ async def test_handle_message_returns_quickly_for_content(agent, mock_llm):
     }
     mock_llm.chat = AsyncMock(return_value=json.dumps(classification))
 
-    with patch("backend.main_agent.SubAgent") as MockSub:
+    with patch("backend.main_agent.DynamicAgent") as MockSub:
         instance = AsyncMock()
         instance.run = _slow_run
         instance.agent_id = "test-456"
@@ -124,7 +124,7 @@ async def test_background_task_error_sends_telegram(agent, mock_llm, mock_telegr
     async def _failing_run():
         raise RuntimeError("boom")
 
-    with patch("backend.main_agent.SubAgent") as MockSub:
+    with patch("backend.main_agent.DynamicAgent") as MockSub:
         instance = AsyncMock()
         instance.run = _failing_run
         instance.agent_id = "test-err"

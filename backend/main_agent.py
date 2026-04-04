@@ -7,6 +7,12 @@ from backend.sub_agent import SubAgent
 from backend.obsidian_writer import ObsidianWriter
 from backend.models import TaskData, TaskStatus
 from backend.scheduler import Scheduler
+from backend.dynamic_agent import DynamicAgent
+from backend.agent_identity import select_agent, load_agent_pool
+from backend.memory.soul_memory import SoulMemory
+from backend.review_gate import ReviewGate, ReviewResult
+from backend.intent_engine import IntentEngine, ParsedIntent
+from backend.smart_scheduler import SmartScheduler
 
 
 from backend.memory.fact_memory import FactMemory, extract_and_store_facts
@@ -52,7 +58,7 @@ _CLASSIFY_SYSTEM = (
     "Nur wenn er 'recherchiere', 'analysiere', 'erstelle einen Report/Guide' sagt → das ist CONTENT.\n\n"
     "Bei quick_reply: Beantworte die Frage direkt.\n"
     "Bei action/content: Bestimme den passenden Agent-Typ.\n\n"
-    "Agent-Typen: coder, researcher, writer, ops\n"
+    "Der passende Agent wird automatisch ausgewählt.\n"
     "Ergebnis-Typen (nur bei content): recherche, guide, cheat-sheet, code, report\n\n"
     "Antworte NUR mit JSON:\n"
     '- quick_reply: {"type": "quick_reply", "answer": "<deine Antwort>"}\n'
@@ -64,10 +70,14 @@ _CLASSIFY_SYSTEM = (
 
 class MainAgent:
     def __init__(self, llm, tools, db, obsidian_writer: ObsidianWriter | None = None,
-                 telegram=None, ws_callback=None, fact_memory: FactMemory | None = None,
-                 scheduler: Scheduler | None = None,
+                 telegram=None, ws_callback=None,
+                 soul_memory: SoulMemory | None = None,
+                 review_gate: ReviewGate | None = None,
+                 intent_engine: IntentEngine | None = None,
+                 scheduler: SmartScheduler | Scheduler | None = None,
                  llm_router: LLMRouter | None = None,
-                 config_service=None):
+                 config_service=None,
+                 fact_memory: FactMemory | None = None):  # legacy
         self.llm = llm
         self.llm_router = llm_router
         self.tools = tools
@@ -75,11 +85,15 @@ class MainAgent:
         self.obsidian_writer = obsidian_writer
         self.telegram = telegram
         self.ws_callback = ws_callback
-        self.fact_memory = fact_memory
+        self.soul_memory = soul_memory
+        self.review_gate = review_gate
+        self.intent_engine = intent_engine
+        self.fact_memory = fact_memory  # legacy
         self.scheduler = scheduler
         self.config_service = config_service
         self.active_agents: dict[str, dict] = {}
         self._pending_tasks: dict[int, asyncio.Task] = {}
+        self._agent_pool = load_agent_pool()
 
     async def _build_context(self) -> str:
         """Build system context from DB for the classify prompt."""
@@ -110,7 +124,14 @@ class MainAgent:
         parts = []
         if _SOUL_CONTENT:
             parts.append(_SOUL_CONTENT)
-        if self.fact_memory:
+        if self.soul_memory:
+            try:
+                memory_block = await self.soul_memory.get_context_block()
+                if memory_block:
+                    parts.append(memory_block)
+            except Exception:
+                pass
+        elif self.fact_memory:
             try:
                 fact_block = await self.fact_memory.get_context_block()
                 if fact_block:
@@ -298,6 +319,15 @@ class MainAgent:
         return chunks
 
     async def _cmd_memory(self, chat_id: str) -> str:
+        if self.soul_memory:
+            try:
+                block = await self.soul_memory.get_context_block()
+                if not block:
+                    return "Noch keine Erinnerungen gespeichert."
+                count = await self.soul_memory.count()
+                return f"*Falkis Memory ({count} Einträge):*\n\n{block}"
+            except Exception as e:
+                return f"Fehler beim Laden des Memory: {e}"
         if not self.fact_memory:
             return "Memory-System nicht aktiv."
         try:
@@ -557,6 +587,56 @@ class MainAgent:
         text = text.strip()
         await self.db.append_chat(chat_id or "default", "user", text)
 
+        # Activity logging
+        if self.soul_memory:
+            try:
+                await self.soul_memory.log_activity(chat_id or "default")
+            except Exception:
+                pass
+
+        # Intent engine parsing (before classification)
+        intent = None
+        if self.intent_engine and not agent_type_hint:
+            try:
+                daily_profile = None
+                memory_context = ""
+                if self.soul_memory:
+                    daily_profile = await self.soul_memory.compute_daily_profile(chat_id or "default")
+                    memory_context = await self.soul_memory.get_context_block()
+                intent = await self.intent_engine.parse(
+                    text, daily_profile=daily_profile, user_memory_context=memory_context,
+                )
+                if intent.type == "reminder" and self.scheduler:
+                    time_expr = intent.time_expressions[0] if intent.time_expressions else ""
+                    await self.scheduler.add_reminder(
+                        chat_id=chat_id, text=intent.enriched_prompt, due_at=time_expr,
+                    )
+                    if self.telegram:
+                        await self.telegram.send_message(
+                            f"Erinnerung eingerichtet: {intent.enriched_prompt}",
+                            chat_id=chat_id or None,
+                        )
+                    return
+                if intent.type == "planned_task" and intent.steps and self.scheduler:
+                    steps = [{"agent_prompt": s["prompt"], "scheduled_at": s.get("scheduled_at")} for s in intent.steps]
+                    await self.scheduler.add_planned_task(
+                        name=text[:80], chat_id=chat_id, steps=steps,
+                    )
+                    if self.telegram:
+                        await self.telegram.send_message(
+                            f"Geplant: {len(steps)} Schritte", chat_id=chat_id or None,
+                        )
+                    return
+                if intent.needs_clarification and intent.confidence < 0.5:
+                    if self.telegram:
+                        await self.telegram.send_message(
+                            intent.clarification_question or "Kannst du das genauer beschreiben?",
+                            chat_id=chat_id or None,
+                        )
+                    return
+            except Exception:
+                pass
+
         if agent_type_hint:
             # Inbox tag provided — skip LLM classification
             classification = {
@@ -571,11 +651,25 @@ class MainAgent:
 
         if msg_type == "quick_reply":
             answer = classification.get("answer", "Ich habe keine Antwort.")
+            # Review gate for quick replies
+            if self.review_gate:
+                try:
+                    review = await self.review_gate.review(
+                        answer=answer, original_request=text, review_level="light",
+                    )
+                    if review.verdict == "REVISE" and review.revised:
+                        answer = review.revised
+                except Exception:
+                    pass
             await self.db.append_chat(chat_id or "default", "assistant", answer)
             if self.telegram:
                 await self.telegram.send_message(answer[:4000], chat_id=chat_id or None)
-            # Fire-and-forget: extract facts from this exchange
-            if self.fact_memory:
+            # Fire-and-forget: extract memories from this exchange
+            if self.soul_memory:
+                asyncio.create_task(
+                    self.soul_memory.extract_memories(self.llm, text, answer)
+                )
+            elif self.fact_memory:
                 asyncio.create_task(
                     extract_and_store_facts(self.llm, self.fact_memory, text, answer)
                 )
@@ -664,16 +758,18 @@ class MainAgent:
                 f"zu bearbeiten und Befehle auszuführen. Schreibe KEINEN Report oder Guide — "
                 f"tu einfach was verlangt wird. Antworte am Ende kurz was du gemacht hast."
             )
-            sub = SubAgent(
-                agent_type=agent_type,
+            identity = select_agent(original_text, self._agent_pool)
+            sub = DynamicAgent(
+                identity=identity,
                 task_description=enriched_desc,
                 llm=self._get_llm_for("action"),
                 tools=self.tools,
                 db=self.db,
+                soul_content=_SOUL_CONTENT,
             )
             sub._progress_callback = self._make_progress_callback(sub.agent_id, title, chat_id)
             self.active_agents[sub.agent_id] = {
-                "type": agent_type, "task": title,
+                "type": identity.role, "task": title,
                 "task_id": task_id, "sub_agent": sub,
                 "asyncio_task": asyncio.current_task(),
             }
@@ -681,11 +777,23 @@ class MainAgent:
             if self.ws_callback:
                 await self.ws_callback({
                     "type": "agent_spawned", "agent_id": sub.agent_id,
-                    "agent_type": agent_type, "task": title,
+                    "agent_type": identity.role, "task": title,
                 })
 
             try:
                 result = await sub.run()
+
+                # Review gate before sending
+                if self.review_gate:
+                    try:
+                        review = await self.review_gate.review(
+                            answer=result, original_request=original_text,
+                        )
+                        if review.verdict == "REVISE" and review.revised:
+                            result = review.revised
+                    except Exception:
+                        pass
+
                 await self.db.update_task_result(task_id, result[:5000])
                 await self.db.update_task_status(task_id, TaskStatus.DONE)
 
@@ -693,20 +801,20 @@ class MainAgent:
                     summary = result[:500] + ("..." if len(result) > 500 else "")
                     if hasattr(self.telegram, 'send_message_with_buttons'):
                         await self.telegram.send_message_with_buttons(
-                            f"✅ Erledigt: {title}\n\n{summary}",
-                            [[{"text": "📋 Details", "callback_data": f"/task {task_id}"}]],
+                            f"Erledigt: {title}\n\n{summary}",
+                            [[{"text": "Details", "callback_data": f"/task {task_id}"}]],
                             chat_id=chat_id or None,
                         )
                     else:
                         await self.telegram.send_message(
-                            f"✅ Erledigt: {title}\n\n{summary}",
+                            f"Erledigt: {title}\n\n{summary}",
                             chat_id=chat_id or None,
                         )
 
                 if self.ws_callback:
                     await self.ws_callback({
                         "type": "agent_done", "agent_id": sub.agent_id,
-                        "agent_type": agent_type, "task": title,
+                        "agent_type": identity.role, "task": title,
                     })
 
             except Exception as e:
@@ -765,16 +873,18 @@ class MainAgent:
                 f"Details: {original_text}\n\n"
                 f"Erstelle ein ausführliches, strukturiertes Ergebnis auf Deutsch."
             )
-            sub = SubAgent(
-                agent_type=agent_type,
+            identity = select_agent(original_text, self._agent_pool)
+            sub = DynamicAgent(
+                identity=identity,
                 task_description=enriched_desc,
                 llm=self._get_llm_for("content"),
                 tools=self.tools,
                 db=self.db,
+                soul_content=_SOUL_CONTENT,
             )
             sub._progress_callback = self._make_progress_callback(sub.agent_id, title, chat_id)
             self.active_agents[sub.agent_id] = {
-                "type": agent_type, "task": title,
+                "type": identity.role, "task": title,
                 "task_id": task_id, "sub_agent": sub,
                 "asyncio_task": asyncio.current_task(),
             }
@@ -782,11 +892,22 @@ class MainAgent:
             if self.ws_callback:
                 await self.ws_callback({
                     "type": "agent_spawned", "agent_id": sub.agent_id,
-                    "agent_type": agent_type, "task": title,
+                    "agent_type": identity.role, "task": title,
                 })
 
             try:
                 result = await sub.run()
+
+                # Review gate before sending
+                if self.review_gate:
+                    try:
+                        review = await self.review_gate.review(
+                            answer=result, original_request=original_text,
+                        )
+                        if review.verdict == "REVISE" and review.revised:
+                            result = review.revised
+                    except Exception:
+                        pass
 
                 # 4. Update DB with result
                 await self.db.update_task_result(task_id, result[:5000])
@@ -825,7 +946,7 @@ class MainAgent:
                 if self.ws_callback:
                     await self.ws_callback({
                         "type": "agent_done", "agent_id": sub.agent_id,
-                        "agent_type": agent_type, "task": title,
+                        "agent_type": identity.role, "task": title,
                     })
 
                 # 8. Check if any blocked tasks are now unblocked
@@ -835,7 +956,7 @@ class MainAgent:
                 await self.db.update_task_status(task_id, TaskStatus.FAILED)
                 if self.telegram:
                     await self.telegram.send_message(
-                        f"❌ Fehler bei: {title}\n{str(e)[:300]}",
+                        f"Fehler bei: {title}\n{str(e)[:300]}",
                         chat_id=chat_id or None,
                     )
             finally:
@@ -885,16 +1006,18 @@ class MainAgent:
                 if accumulated_context:
                     enriched += f"\nErgebnisse vorheriger Schritte:\n{accumulated_context[:3000]}\n"
 
-                sub = SubAgent(
-                    agent_type=agent_type, task_description=enriched,
+                identity = select_agent(step_desc, self._agent_pool)
+                sub = DynamicAgent(
+                    identity=identity, task_description=enriched,
                     llm=self._get_llm_for("content"), tools=self.tools, db=self.db,
+                    soul_content=_SOUL_CONTENT,
                 )
                 sub._progress_callback = self._make_progress_callback(sub.agent_id, step_desc, chat_id)
 
                 if self.ws_callback:
                     await self.ws_callback({
                         "type": "agent_spawned", "agent_id": sub.agent_id,
-                        "agent_type": agent_type, "task": f"[{i+1}/{len(steps)}] {step_desc[:60]}",
+                        "agent_type": identity.role, "task": f"[{i+1}/{len(steps)}] {step_desc[:60]}",
                     })
 
                 try:
@@ -961,8 +1084,7 @@ class MainAgent:
             print(f"Dependency dispatch error: {e}")
 
     async def handle_scheduled(self, task: dict) -> None:
-        """Run a scheduled task through a SubAgent with full visibility."""
-        agent_type = task.get("agent_type", "researcher")
+        """Run a scheduled task through a DynamicAgent with full visibility."""
         prompt = task.get("prompt", "")
         name = task.get("name", "scheduled")
         schedule_id = task.get("id")
@@ -978,13 +1100,18 @@ class MainAgent:
 
         # 2. Register in active_agents
         llm = self._get_llm_for("scheduled")
-        sub = SubAgent(agent_type=agent_type, task_description=prompt, llm=llm, tools=self.tools, db=self.db)
+        identity = select_agent(prompt, self._agent_pool)
+        sub = DynamicAgent(
+            identity=identity, task_description=prompt,
+            llm=llm, tools=self.tools, db=self.db,
+            soul_content=_SOUL_CONTENT,
+        )
         sub._progress_callback = self._make_progress_callback(sub.agent_id, name, "")
-        self.active_agents[sub.agent_id] = {"type": agent_type, "task": name, "task_id": task_id}
+        self.active_agents[sub.agent_id] = {"type": identity.role, "task": name, "task_id": task_id}
 
         # 3. Send WS event
         if self.ws_callback:
-            await self.ws_callback({"type": "agent_spawned", "agent_id": sub.agent_id, "agent_type": agent_type, "task": name})
+            await self.ws_callback({"type": "agent_spawned", "agent_id": sub.agent_id, "agent_type": identity.role, "task": name})
 
         if self.ws_callback:
             await self.ws_callback({"type": "schedule_fired", "schedule_id": schedule_id, "name": name})

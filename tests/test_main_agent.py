@@ -81,7 +81,7 @@ async def test_handle_quick_reply(agent, mock_llm, mock_telegram):
 @pytest.mark.asyncio
 async def test_handle_task_sends_confirmation(agent, mock_llm, mock_telegram, mock_db):
     mock_llm.chat = AsyncMock(return_value='{"type": "content", "agent": "coder", "result_type": "code", "title": "Backup Script"}')
-    with patch("backend.main_agent.SubAgent") as MockSub:
+    with patch("backend.main_agent.DynamicAgent") as MockSub:
         mock_sub = AsyncMock()
         mock_sub.run = AsyncMock(return_value="Script erstellt: rsync ...")
         mock_sub.agent_id = "sub_coder_abc123"
@@ -97,7 +97,7 @@ async def test_handle_task_sends_confirmation(agent, mock_llm, mock_telegram, mo
 async def test_action_no_obsidian_report(agent, mock_llm, mock_telegram, mock_db, mock_obsidian_writer):
     """Action tasks should NOT write a report to Obsidian."""
     mock_llm.chat = AsyncMock(return_value='{"type": "action", "agent": "ops", "title": "Schedule optimieren"}')
-    with patch("backend.main_agent.SubAgent") as MockSub:
+    with patch("backend.main_agent.DynamicAgent") as MockSub:
         mock_sub = AsyncMock()
         mock_sub.run = AsyncMock(return_value="Schedule-Dateien angepasst.")
         mock_sub.agent_id = "sub_ops_abc123"
@@ -115,7 +115,7 @@ async def test_action_no_obsidian_report(agent, mock_llm, mock_telegram, mock_db
 @pytest.mark.asyncio
 async def test_active_agents_tracking(agent, mock_llm):
     mock_llm.chat = AsyncMock(return_value='{"type": "content", "agent": "coder", "result_type": "code", "title": "Test"}')
-    with patch("backend.main_agent.SubAgent") as MockSub:
+    with patch("backend.main_agent.DynamicAgent") as MockSub:
         mock_sub = AsyncMock()
         mock_sub.run = AsyncMock(return_value="Done")
         mock_sub.agent_id = "sub_coder_abc123"
@@ -213,7 +213,7 @@ def _make_scheduled_task(name="Heartbeat", schedule="stündlich", agent_type="op
 async def test_handle_scheduled_heartbeat_ok(agent, mock_telegram, mock_db):
     """HEARTBEAT_OK result suppresses Telegram and Obsidian write, but creates DB task."""
     task = _make_scheduled_task()
-    with patch("backend.main_agent.SubAgent") as MockSub:
+    with patch("backend.main_agent.DynamicAgent") as MockSub:
         mock_sub = AsyncMock()
         mock_sub.run = AsyncMock(return_value="HEARTBEAT_OK")
         mock_sub.agent_id = "sub_ops_hb"
@@ -232,7 +232,7 @@ async def test_handle_scheduled_heartbeat_ok(agent, mock_telegram, mock_db):
 async def test_handle_scheduled_with_report(agent, mock_telegram, mock_obsidian_writer, mock_db):
     """Normal result writes to Obsidian and sends Telegram summary."""
     task = _make_scheduled_task(name="Daily Check", prompt="Prüfe alle offenen Tasks.")
-    with patch("backend.main_agent.SubAgent") as MockSub:
+    with patch("backend.main_agent.DynamicAgent") as MockSub:
         mock_sub = AsyncMock()
         mock_sub.run = AsyncMock(return_value="Systemstatus: Alles OK. 3 Tasks offen.")
         mock_sub.agent_id = "sub_ops_daily"
@@ -257,7 +257,7 @@ async def test_handle_scheduled_error(agent, mock_telegram, mock_db):
     task = _make_scheduled_task(name="Failing Task")
     ws_events = []
     agent.ws_callback = AsyncMock(side_effect=lambda msg: ws_events.append(msg))
-    with patch("backend.main_agent.SubAgent") as MockSub:
+    with patch("backend.main_agent.DynamicAgent") as MockSub:
         mock_sub = AsyncMock()
         mock_sub.run = AsyncMock(side_effect=RuntimeError("LLM timeout"))
         mock_sub.agent_id = "sub_ops_fail"
@@ -282,7 +282,7 @@ async def test_handle_scheduled_ws_events(agent, mock_db):
     task = _make_scheduled_task(name="WS Test")
     ws_events = []
     agent.ws_callback = AsyncMock(side_effect=lambda msg: ws_events.append(msg))
-    with patch("backend.main_agent.SubAgent") as MockSub:
+    with patch("backend.main_agent.DynamicAgent") as MockSub:
         mock_sub = AsyncMock()
         mock_sub.run = AsyncMock(return_value="HEARTBEAT_OK")
         mock_sub.agent_id = "sub_ops_ws"
