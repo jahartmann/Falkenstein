@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 
 CONFIG_DEFAULTS: list[dict] = [
     {"key": "soul_prompt", "value": "", "category": "personality", "description": "Falki system prompt / personality"},
-    {"key": "obsidian_vault_path", "value": "~/Obsidian", "category": "paths", "description": "Obsidian vault root"},
+    {"key": "obsidian_vault_path", "value": "~/Library/Mobile Documents/iCloud~md~obsidian/Documents", "category": "paths", "description": "Obsidian vault root (iCloud)"},
     {"key": "workspace_path", "value": "./workspace", "category": "paths", "description": "SubAgent workspace directory"},
     {"key": "ollama_host", "value": "http://localhost:11434", "category": "llm", "description": "Ollama API host"},
     {"key": "ollama_model", "value": "gemma4:26b", "category": "llm", "description": "Default Ollama model"},

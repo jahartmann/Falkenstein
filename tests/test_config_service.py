@@ -104,7 +104,7 @@ async def test_get_path(cfg: ConfigService):
     from pathlib import Path
     p = cfg.get_path("obsidian_vault_path")
     assert isinstance(p, Path)
-    assert str(p).endswith("Obsidian")
+    assert str(p).endswith("Documents")
 
 
 @pytest.mark.asyncio
