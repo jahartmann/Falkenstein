@@ -60,6 +60,13 @@
           <div class="panel"><h2>Aktive Agents</h2><div id="agents-list" class="agents-list"><span class="text-muted">Keine aktiven Agents</span></div></div>
           <div class="panel"><h2>Letzte Aktivität</h2><div id="activity-feed" class="activity-feed"><span class="text-muted">Keine Aktivität</span></div></div>
         </div>
+        <div class="panel" id="agent-log-panel" style="display:none;margin-top:16px">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <h2>Agent Log <span id="agent-log-title" style="color:var(--accent)"></span></h2>
+            <button class="btn btn-sm" onclick="closeAgentLog()">×</button>
+          </div>
+          <div id="agent-log" class="activity-feed" style="max-height:400px"></div>
+        </div>
       </section>
 
       <!-- Tasks Section -->

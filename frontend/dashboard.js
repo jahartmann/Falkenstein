@@ -84,7 +84,7 @@ async function loadDashboard() {
       agentsList.innerHTML = data.active_agents.map(a => {
         const task = a.task || a.name || 'agent';
         const type = a.type || '';
-        return `<div class="agent-chip" data-agent-id="${esc(a.agent_id || '')}"><div class="agent-pulse"></div><span>${esc(task)}</span><span class="agent-type">${esc(type)}</span><span class="agent-tool-status"></span></div>`;
+        return `<div class="agent-chip" data-agent-id="${esc(a.agent_id || '')}" onclick="showAgentLog('${esc(a.agent_id || '')}')" style="cursor:pointer"><div class="agent-pulse"></div><span>${esc(task)}</span><span class="agent-type">${esc(type)}</span><span class="agent-tool-status"></span></div>`;
       }).join('');
     } else {
       agentsList.innerHTML = '<span class="text-muted">Keine aktiven Agents</span>';
@@ -107,6 +107,37 @@ function renderActivity() {
   el.innerHTML = activityLog.map(a =>
     `<div class="activity-item"><div class="activity-icon" style="background:${a.color}"></div><span>${esc(a.text)}</span><span class="activity-time">${relTime(a.time)}</span></div>`
   ).join('');
+}
+
+// Agent Log
+async function showAgentLog(agentId) {
+  if (!agentId) return;
+  const panel = document.getElementById('agent-log-panel');
+  document.getElementById('agent-log-title').textContent = agentId.slice(-8);
+  panel.dataset.agentId = agentId;
+  try {
+    const data = await api('/agents/' + agentId + '/log');
+    const logEl = document.getElementById('agent-log');
+    const logs = data.logs || [];
+    if (logs.length > 0) {
+      logEl.innerHTML = logs.map(l => {
+        const icon = l.success ? 'var(--green)' : 'var(--red)';
+        const preview = l.output ? l.output.slice(0, 100) : '';
+        return `<div class="activity-item">
+          <div class="activity-icon" style="background:${icon}"></div>
+          <span><strong>${esc(l.tool)}</strong> ${esc(preview)}</span>
+          <span class="activity-time">${relTime(l.time)}</span>
+        </div>`;
+      }).join('');
+    } else {
+      logEl.innerHTML = '<span class="text-muted">Kein Log vorhanden</span>';
+    }
+    panel.style.display = 'block';
+  } catch (e) { console.error('Agent log error:', e); }
+}
+
+function closeAgentLog() {
+  document.getElementById('agent-log-panel').style.display = 'none';
 }
 
 // Tasks
@@ -403,6 +434,18 @@ function connectWS() {
       if (labels[type]) addActivity(type, labels[type]);
       if (type === 'agent_progress') {
         addActivity('agent_progress', (msg.label || msg.tool) + ' (' + (msg.agent_id || '').slice(-8) + ')');
+        // Live-update log panel if showing this agent
+        const panel = document.getElementById('agent-log-panel');
+        if (panel.style.display !== 'none' && panel.dataset.agentId === msg.agent_id) {
+          const logEl = document.getElementById('agent-log');
+          const item = document.createElement('div');
+          item.className = 'activity-item';
+          item.innerHTML = `<div class="activity-icon" style="background:var(--blue)"></div>
+            <span><strong>${esc(msg.tool)}</strong> ${esc(msg.label)}</span>
+            <span class="activity-time">jetzt</span>`;
+          logEl.appendChild(item);
+          logEl.scrollTop = logEl.scrollHeight;
+        }
       }
       if (['agent_spawned','agent_done','agent_error','task_created'].includes(type)) {
         loadDashboard();

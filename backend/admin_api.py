@@ -148,7 +148,7 @@ async def get_schedule_detail(schedule_id: int):
     parsed = parse_schedule(row.get("schedule", ""))
     preview = []
     if parsed.get("type") != "cron":
-        runs = get_next_runs(parsed, count=3)
+        runs = get_next_runs(parsed, count=3, active_hours_str=row.get("active_hours"))
         preview = [r.isoformat() for r in runs]
 
     return {**dict(row), "next_runs_preview": preview}
@@ -354,6 +354,29 @@ async def submit_task(data: TaskSubmit):
         return {"error": "Not initialized"}
     asyncio.create_task(_main_agent.handle_message(data.text))
     return {"submitted": True}
+
+
+@router.get("/agents/{agent_id}/log")
+async def get_agent_log(agent_id: str, limit: int = 50):
+    """Get tool execution log for a specific agent."""
+    async with _db._conn.execute(
+        "SELECT tool_name, input, output, success, created_at FROM tool_log "
+        "WHERE agent_id = ? ORDER BY created_at DESC LIMIT ?",
+        (agent_id, limit),
+    ) as cur:
+        rows = await cur.fetchall()
+    return {
+        "logs": [
+            {
+                "tool": r["tool_name"],
+                "input": (r["input"] or "")[:200],
+                "output": (r["output"] or "")[:500],
+                "success": bool(r["success"]),
+                "time": r["created_at"],
+            }
+            for r in reversed(list(rows))
+        ]
+    }
 
 
 # ── Memory ───────────────────────────────────────────────────────────
