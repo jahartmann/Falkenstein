@@ -102,9 +102,10 @@
 <body>
     <div id="game-container"></div>
     <div id="bottom-bar">
-        <input id="task-input" type="text" placeholder="Task eingeben... (WASD/Pfeiltasten zum Bewegen)" />
+        <input id="task-input" type="text" placeholder="Task eingeben..." />
         <button class="btn" onclick="submitTask()">Absenden</button>
         <button class="btn-small" onclick="showTaskBoard()">Tasks</button>
+        <button class="btn-small" onclick="window.location='/admin'">Admin</button>
     </div>
 
     <div id="backdrop" onclick="closeOverlays()"></div>
