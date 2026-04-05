@@ -15,7 +15,12 @@ def test_hot_reload_fields_defined():
 @pytest.fixture
 def client():
     from backend.main import app
-    return TestClient(app)
+    # Disable auth for these tests by using the token from config so requests succeed.
+    # We pass the token via header so tests work regardless of API_TOKEN value.
+    import backend.config as _cfg
+    token = _cfg.API_TOKEN
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    return TestClient(app, headers=headers)
 
 
 def test_admin_page_route_exists(client):

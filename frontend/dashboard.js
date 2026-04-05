@@ -39,7 +39,17 @@ function relTime(dateStr) {
 }
 
 async function api(path, opts = {}) {
-  const res = await fetch(API + path, { headers: { 'Content-Type': 'application/json' }, ...opts });
+  const token = localStorage.getItem('falkenstein_token') || '';
+  const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
+  if (token) headers['Authorization'] = 'Bearer ' + token;
+  const res = await fetch(API + path, { ...opts, headers });
+  if (res.status === 401) {
+    const newToken = prompt('API Token eingeben:');
+    if (newToken) {
+      localStorage.setItem('falkenstein_token', newToken);
+      return api(path, opts);
+    }
+  }
   return res.json();
 }
 
@@ -416,7 +426,9 @@ function closeModalOverlay(e) { if (e.target === e.currentTarget) e.target.class
 // WebSocket
 function connectWS() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  ws = new WebSocket(proto + '//' + location.host + '/ws');
+  const token = localStorage.getItem('falkenstein_token') || '';
+  const url = proto + '//' + location.host + '/ws' + (token ? '?token=' + encodeURIComponent(token) : '');
+  ws = new WebSocket(url);
   ws.onopen = () => { document.getElementById('ws-dot').classList.add('connected'); document.getElementById('ws-status').textContent = 'Verbunden'; };
   ws.onclose = () => { document.getElementById('ws-dot').classList.remove('connected'); document.getElementById('ws-status').textContent = 'Getrennt'; setTimeout(connectWS, 3000); };
   ws.onerror = () => ws.close();

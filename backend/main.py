@@ -6,7 +6,9 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from backend.config import DB_PATH, PORT, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_ALLOWED_CHAT_IDS
+from backend.config import DB_PATH, PORT, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_ALLOWED_CHAT_IDS, API_TOKEN
+from fastapi.middleware.cors import CORSMiddleware
+from backend.security.auth import BearerAuthMiddleware
 from backend.security.telegram_allowlist import TelegramAllowlist
 from backend.config_service import ConfigService
 from backend.admin_api import router as admin_router
@@ -212,6 +214,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Falkenstein", lifespan=lifespan)
+app.add_middleware(BearerAuthMiddleware, api_token=API_TOKEN)
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 app.include_router(admin_router)
 
 frontend_dir = Path(__file__).parent.parent / "frontend"
