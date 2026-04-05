@@ -34,6 +34,7 @@ from backend.tools.vision import VisionTool
 from backend.tools.system_shell import SystemShellTool
 from backend.tools.ollama_manager import OllamaManagerTool
 from backend.tools.self_config import SelfConfigTool
+from backend.tools.ops_executor import OpsExecutor
 from backend.memory.fact_memory import FactMemory
 from backend.llm_router import LLMRouter
 
@@ -121,6 +122,7 @@ async def lifespan(app: FastAPI):
     tools.register(VisionTool(workspace_path=workspace, llm=llm))
     project_root = Path(__file__).parent.parent
     tools.register(SystemShellTool())
+    tools.register(OpsExecutor(project_root=project_root))
     tools.register(OllamaManagerTool())
     tools.register(SelfConfigTool(project_path=project_root))
 

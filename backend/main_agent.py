@@ -53,6 +53,10 @@ _CLASSIFY_SYSTEM = (
     "4. multi_step — Der Nutzer will eine Aufgabe, die mehrere Schritte erfordert "
     "(z.B. 'Recherchiere X und schreibe dann einen Blogpost', 'Vergleiche A und B und erstelle eine Zusammenfassung'). "
     "Hier werden mehrere Agents nacheinander ausgeführt.\n\n"
+    "5. ops_command — Der Nutzer will einen System-/Server-Befehl ausführen "
+    "(git pull, cd, ls, server starten/stoppen, update, logs anzeigen, Ordner ansehen). "
+    "Auch wenn er es umgangssprachlich formuliert ('pull mal', 'update den code', 'zeig mir den ordner', "
+    "'starte das skript'). Nutze dafür das ops_executor Tool.\n\n"
     "WICHTIG: Wenn der Nutzer sagt 'optimiere X', 'stelle X ein', 'mach X' → das ist eine ACTION.\n"
     "Nur wenn er 'recherchiere', 'analysiere', 'erstelle einen Report/Guide' sagt → das ist CONTENT.\n\n"
     "Bei quick_reply: Beantworte die Frage direkt.\n"
@@ -63,7 +67,8 @@ _CLASSIFY_SYSTEM = (
     '- quick_reply: {"type": "quick_reply", "answer": "<deine Antwort>"}\n'
     '- action: {"type": "action", "agent": "<typ>", "title": "<kurzer Titel>"}\n'
     '- content: {"type": "content", "agent": "<typ>", "result_type": "<typ>", "title": "<kurzer Titel>"}\n'
-    '- multi_step: {"type": "multi_step", "title": "<Titel>", "steps": [{"agent": "<typ>", "task": "<Beschreibung>"}, ...]}'
+    '- multi_step: {"type": "multi_step", "title": "<Titel>", "steps": [{"agent": "<typ>", "task": "<Beschreibung>"}, ...]}\n'
+    '- ops_command: {"type": "ops_command", "command_hint": "<was der user will>", "title": "<kurzer Titel>"}\n'
 )
 
 
@@ -598,6 +603,17 @@ class MainAgent:
 
     async def _handle_command(self, text: str, chat_id: str) -> str | None:
         """Parse and execute a /command. Returns response text, or None if not a command."""
+        # Handle ops confirmation callbacks
+        if text.startswith("ops_confirm_") or text.startswith("ops_cancel_"):
+            plan_id = text.split("_", 2)[-1]
+            plans = getattr(self, "_pending_ops_plans", {})
+            plan = plans.pop(plan_id, None)
+            if not plan:
+                return "Plan abgelaufen oder nicht gefunden."
+            if text.startswith("ops_cancel_"):
+                return "Ops abgebrochen."
+            asyncio.create_task(self._execute_ops_plan(plan, chat_id))
+            return "Wird ausgeführt..."
         if not text.startswith("/"):
             return None
         parts = text.split(maxsplit=1)
@@ -769,6 +785,13 @@ class MainAgent:
             self._pending_tasks[id(task)] = task
             task.add_done_callback(lambda t: self._pending_tasks.pop(id(t), None))
             return classification.get("title", "Multi-Step gestartet")
+        elif msg_type == "ops_command":
+            task = asyncio.create_task(
+                self._handle_ops_command(classification, text, chat_id)
+            )
+            self._pending_tasks[id(task)] = task
+            task.add_done_callback(lambda t: self._pending_tasks.pop(id(t), None))
+            return classification.get("title", "Ops gestartet")
 
     def _get_llm_for(self, task_type: str):
         """Get the right LLM for a task type via router, fallback to default."""
@@ -783,6 +806,7 @@ class MainAgent:
             "obsidian_manager": "Lese/Schreibe Obsidian", "vision": "Analysiere Bild",
             "ollama_manager": "Ollama-Verwaltung", "self_config": "Konfiguration",
             "cli_bridge": "Premium LLM", "file_manager": "Dateiverwaltung",
+            "ops_executor": "Ops-Befehl",
         }
         async def callback(tool_name: str, success: bool):
             label = _tool_labels.get(tool_name, tool_name)
@@ -1246,6 +1270,109 @@ class MainAgent:
                 await self.ws_callback({"type": "agent_error", "agent_id": sub.agent_id, "error": str(e)})
         finally:
             self.active_agents.pop(sub.agent_id, None)
+
+    async def _handle_ops_command(self, classification: dict, original_text: str, chat_id: str):
+        """Handle ops commands with Telegram confirmation."""
+        try:
+            command_hint = classification.get("command_hint", original_text)
+            title = classification.get("title", command_hint[:80])
+
+            ops_tool = self.tools.get("ops_executor")
+            if not ops_tool:
+                if self.telegram:
+                    await self.telegram.send_message("OpsExecutor nicht verfügbar.", chat_id=chat_id or None)
+                return
+
+            # Let LLM inspect environment and generate command plan
+            env_info = await ops_tool.inspect_environment()
+            llm = self._get_llm_for("action")
+
+            plan_prompt = (
+                f"Du bist ein DevOps-Agent. Der Nutzer will: {original_text}\n\n"
+                f"Aktuelle Umgebung:\n{env_info}\n\n"
+                f"Projekt-Root: {ops_tool.project_root}\n"
+                f"Start-Script: {ops_tool.project_root}/start.sh\n\n"
+                f"Erstelle eine Liste von Shell-Befehlen um das auszuführen. "
+                f"Beachte: Befehle laufen im Projekt-Root. Nutze relative Pfade. "
+                f"Das venv ist unter ./venv/. Der Server wird mit ./start.sh gestartet.\n\n"
+                f"Antworte NUR mit JSON:\n"
+                f'{{"description": "Was wird gemacht", "commands": ["cmd1", "cmd2"], '
+                f'"risk_level": "low|medium|high", "restart_after": true/false}}'
+            )
+
+            response = await llm.chat(
+                system_prompt="Du generierst Shell-Befehle für einen Linux/macOS Server. Nur JSON zurückgeben.",
+                messages=[{"role": "user", "content": plan_prompt}],
+                temperature=0.1,
+            )
+
+            import json as _json
+            try:
+                text = response.strip()
+                if "{" in text:
+                    text = text[text.index("{"):text.rindex("}") + 1]
+                plan_data = _json.loads(text)
+            except (_json.JSONDecodeError, ValueError):
+                if self.telegram:
+                    await self.telegram.send_message(f"Konnte keinen Befehlsplan erstellen für: {title}", chat_id=chat_id or None)
+                return
+
+            commands = plan_data.get("commands", [])
+            description = plan_data.get("description", title)
+            risk = plan_data.get("risk_level", "medium")
+
+            if not commands:
+                if self.telegram:
+                    await self.telegram.send_message("Keine Befehle generiert.", chat_id=chat_id or None)
+                return
+
+            # Ask for confirmation via Telegram
+            plan_text = f"*Ops: {description}*\n\nBefehle:\n"
+            for i, cmd in enumerate(commands, 1):
+                plan_text += f"`{i}. {cmd}`\n"
+            plan_text += f"\nRisiko: {risk}"
+
+            import uuid
+            plan_id = uuid.uuid4().hex[:8]
+            self._pending_ops_plans = getattr(self, "_pending_ops_plans", {})
+            self._pending_ops_plans[plan_id] = {
+                "commands": commands,
+                "description": description,
+                "chat_id": chat_id,
+                "restart_after": plan_data.get("restart_after", False),
+            }
+
+            if self.telegram:
+                await self.telegram.send_message_with_buttons(
+                    plan_text,
+                    [[
+                        {"text": "Ausführen", "callback_data": f"ops_confirm_{plan_id}"},
+                        {"text": "Abbrechen", "callback_data": f"ops_cancel_{plan_id}"},
+                    ]],
+                    chat_id=chat_id or None,
+                )
+        except Exception as e:
+            if self.telegram:
+                await self.telegram.send_message(f"Ops-Fehler: {str(e)[:300]}", chat_id=chat_id or None)
+
+    async def _execute_ops_plan(self, plan: dict, chat_id: str):
+        """Execute a confirmed ops plan."""
+        ops_tool = self.tools.get("ops_executor")
+        if not ops_tool:
+            return
+        for cmd in plan["commands"]:
+            if self.telegram:
+                await self.telegram.send_message(f"`{cmd}`", chat_id=chat_id or None)
+            result = await ops_tool._run_shell(cmd, str(ops_tool.project_root))
+            if self.telegram:
+                status = "ok" if "Exit" not in result and "Fehler" not in result else "FEHLER"
+                await self.telegram.send_message(
+                    f"[{status}] `{cmd}`\n```\n{result[:500]}\n```",
+                    chat_id=chat_id or None,
+                )
+        summary = f"*Ops abgeschlossen: {plan['description']}*\n{len(plan['commands'])} Befehle ausgeführt."
+        if self.telegram:
+            await self.telegram.send_message(summary, chat_id=chat_id or None)
 
     def get_status(self) -> dict:
         return {
