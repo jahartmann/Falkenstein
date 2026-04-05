@@ -35,7 +35,7 @@ export class BootScene extends Phaser.Scene {
 
     for (let i = 0; i <= 5; i++) {
       this.load.spritesheet(`char_${i}`, `/static/assets/characters/char_${i}.png`, {
-        frameWidth: 16, frameHeight: 16
+        frameWidth: 16, frameHeight: 32
       });
     }
   }
