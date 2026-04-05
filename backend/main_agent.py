@@ -15,6 +15,7 @@ from backend.smart_scheduler import SmartScheduler
 
 from backend.memory.fact_memory import FactMemory, extract_and_store_facts
 from backend.llm_router import LLMRouter
+from backend.security.input_guard import InputGuard
 
 _ENRICH_PROMPT_SYSTEM = (
     "Du bist ein Prompt-Engineer. Der Nutzer gibt dir eine kurze Aufgabenbeschreibung "
@@ -91,6 +92,7 @@ class MainAgent:
         self.scheduler = scheduler
         self.config_service = config_service
         self.allowlist = allowlist
+        self._input_guard = InputGuard()
         self.active_agents: dict[str, dict] = {}
         self._pending_tasks: dict[int, asyncio.Task] = {}
         self._agent_pool = load_agent_pool()
@@ -631,6 +633,34 @@ class MainAgent:
             return
 
         text = text.strip()
+
+        # Prompt injection guard — runs before any LLM call
+        guard_result = self._input_guard.check_patterns(text)
+        if guard_result.action == "BLOCK":
+            block_msg = f"Anfrage blockiert: {guard_result.reason}"
+            if self.telegram:
+                await self.telegram.send_message(block_msg[:4000], chat_id=chat_id or None)
+            try:
+                await self.db.log_tool_use(
+                    "main_agent", "input_guard",
+                    {"text": text[:200]},
+                    guard_result.reason,
+                    False,
+                )
+            except Exception:
+                pass
+            return
+        if guard_result.action == "WARN":
+            try:
+                await self.db.log_tool_use(
+                    "main_agent", "input_guard_warn",
+                    {"text": text[:200]},
+                    guard_result.reason,
+                    True,
+                )
+            except Exception:
+                pass
+
         await self.db.append_chat(chat_id or "default", "user", text)
 
         # Activity logging
