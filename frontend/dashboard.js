@@ -38,6 +38,17 @@ function relTime(dateStr) {
   return d.toLocaleDateString('de');
 }
 
+function relTimeFuture(dateStr) {
+  if (!dateStr) return '—';
+  const d = new Date(dateStr);
+  const diff = (d.getTime() - Date.now()) / 1000;
+  if (diff <= 0) return 'fällig';
+  if (diff < 60) return 'in ' + Math.ceil(diff) + ' Sek';
+  if (diff < 3600) return 'in ' + Math.ceil(diff / 60) + ' Min';
+  if (diff < 86400) return 'in ' + Math.floor(diff / 3600) + ' Std';
+  return d.toLocaleDateString('de') + ' ' + d.toLocaleTimeString('de', {hour:'2-digit', minute:'2-digit'});
+}
+
 async function api(path, opts = {}) {
   const token = localStorage.getItem('falkenstein_token') || '';
   const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
@@ -250,7 +261,7 @@ async function loadSchedules() {
       tbody.innerHTML = tasks.map(s => {
         const active = s.active === 1 || s.active === true;
         const lastRun = s.last_run ? relTime(s.last_run) : 'Nie';
-        const nextRun = s.next_run ? relTime(s.next_run) : '—';
+        const nextRun = s.next_run ? relTimeFuture(s.next_run) : '—';
         const resultBadge = s.last_status ? badge(s.last_status) : '<span class="text-muted">—</span>';
         return `<tr class="expandable" onclick="toggleScheduleRow(this, ${s.id})">
           <td><strong>${esc(s.name)}</strong></td>
