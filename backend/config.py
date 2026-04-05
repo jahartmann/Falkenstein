@@ -13,6 +13,8 @@ PORT = int(os.getenv("PORT", os.getenv("FRONTEND_PORT", "8800")))
 DB_PATH = Path(os.getenv("DB_PATH", "./data/falkenstein.db"))
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", os.getenv("TELEGRAM_TOKEN", ""))
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+API_TOKEN = os.getenv("API_TOKEN", "")
+TELEGRAM_ALLOWED_CHAT_IDS = os.getenv("TELEGRAM_ALLOWED_CHAT_IDS", "")
 
 
 # Legacy Settings (still used by LLMClient, TelegramBot, etc.)
