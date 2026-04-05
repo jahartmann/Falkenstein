@@ -22,15 +22,16 @@ _main_agent = None
 _budget_tracker = None
 _llm_router = None
 _fact_memory = None
+_soul_memory = None
 
 
 def set_dependencies(db=None, scheduler=None, config_service=None,
                      main_agent=None, budget_tracker=None, llm_router=None,
-                     fact_memory=None):
-    global _db, _scheduler, _config_service, _main_agent, _budget_tracker, _llm_router, _fact_memory
+                     fact_memory=None, soul_memory=None):
+    global _db, _scheduler, _config_service, _main_agent, _budget_tracker, _llm_router, _fact_memory, _soul_memory
     _db = db; _scheduler = scheduler; _config_service = config_service
     _main_agent = main_agent; _budget_tracker = budget_tracker; _llm_router = llm_router
-    _fact_memory = fact_memory
+    _fact_memory = fact_memory; _soul_memory = soul_memory
 
 
 def init(start_time: float):
@@ -64,6 +65,7 @@ class ScheduleAICreate(BaseModel):
 
 class TaskSubmit(BaseModel):
     text: str
+    chat_id: str | None = None
 
 
 class TaskCreate(BaseModel):
@@ -361,10 +363,15 @@ async def delete_task(task_id: int):
 
 @router.post("/tasks/submit")
 async def submit_task(data: TaskSubmit):
-    """Submit a new task via the admin UI (goes through MainAgent)."""
+    """Submit a new task via admin UI or Siri Shortcut (goes through MainAgent).
+
+    If chat_id is provided (e.g. Telegram chat_id), response goes there.
+    Otherwise defaults to "dashboard" for WS push.
+    """
     if not _main_agent:
         return {"error": "Not initialized"}
-    asyncio.create_task(_main_agent.handle_message(data.text))
+    chat_id = data.chat_id or "dashboard"
+    asyncio.create_task(_main_agent.handle_message(data.text, chat_id=chat_id))
     return {"submitted": True}
 
 
@@ -412,8 +419,12 @@ async def get_agent_log(agent_id: str, limit: int = 50):
 
 # ── Siri / iOS Shortcuts ─────────────────────────────────────────────
 
+_bot_username_cache: str | None = None
+
+
 @router.get("/siri-info")
 async def get_siri_info():
+    global _bot_username_cache
     from backend.config import API_TOKEN, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, PORT
     import socket
     try:
@@ -423,12 +434,27 @@ async def get_siri_info():
         s.close()
     except Exception:
         local_ip = "localhost"
+
+    # Fetch bot username (cached after first call)
+    bot_username = _bot_username_cache or ""
+    if not bot_username and TELEGRAM_TOKEN:
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=5) as client:
+                resp = await client.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getMe")
+                if resp.status_code == 200:
+                    bot_username = resp.json().get("result", {}).get("username", "")
+                    _bot_username_cache = bot_username
+        except Exception:
+            pass
+
     return {
         "api_token": API_TOKEN,
         "server_url": f"http://{local_ip}:{PORT}",
         "telegram_bot_token": TELEGRAM_TOKEN,
         "telegram_chat_id": TELEGRAM_CHAT_ID,
         "telegram_api_url": f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+        "bot_username": bot_username,
         "port": PORT,
     }
 
@@ -437,16 +463,89 @@ async def get_siri_info():
 
 @router.get("/memory")
 async def get_memory():
-    """Get all stored facts from Falki's memory."""
-    if not _fact_memory:
-        return {"facts": []}
-    facts = await _fact_memory.get_all_active()
-    return {
-        "facts": [
-            {"id": f.id, "category": f.category, "content": f.content, "source": f.source}
-            for f in facts
-        ]
-    }
+    """Get all stored memories (SoulMemory 3-layer system)."""
+    if _soul_memory:
+        memories = await _soul_memory.get_all()
+        return {
+            "memories": [
+                {"id": m["id"], "layer": m["layer"], "category": m["category"],
+                 "key": m["key"], "value": m["value"], "source": m.get("source", "")}
+                for m in memories
+            ]
+        }
+    if _fact_memory:
+        facts = await _fact_memory.get_all_active()
+        return {
+            "memories": [
+                {"id": f.id, "layer": "user", "category": f.category,
+                 "key": "", "value": f.content, "source": f.source}
+                for f in facts
+            ]
+        }
+    return {"memories": []}
+
+
+class MemoryCreate(BaseModel):
+    layer: str = "user"
+    category: str = "general"
+    key: str = ""
+    value: str
+
+
+@router.post("/memory")
+async def create_memory(mem: MemoryCreate):
+    """Manually add a memory entry."""
+    if not _soul_memory:
+        return {"error": "Memory not initialized"}
+    mid = await _soul_memory.add(
+        layer=mem.layer, category=mem.category,
+        key=mem.key, value=mem.value, source="dashboard",
+    )
+    return {"id": mid, "saved": True}
+
+
+# ── Reminders ────────────────────────────────────────────────────────
+
+class ReminderCreate(BaseModel):
+    text: str
+    due_at: str
+    chat_id: str = "dashboard"
+    follow_up: bool = False
+
+
+@router.get("/reminders")
+async def get_reminders():
+    """Get all reminders."""
+    if not _db or not _db._conn:
+        return {"reminders": []}
+    cursor = await _db._conn.execute(
+        "SELECT id, chat_id, text, due_at, delivered, follow_up, created_at "
+        "FROM reminders ORDER BY due_at ASC"
+    )
+    rows = await cursor.fetchall()
+    return {"reminders": [dict(r) for r in rows]}
+
+
+@router.post("/reminders")
+async def create_reminder(rem: ReminderCreate):
+    """Create a reminder directly (bypassing chat intent)."""
+    if not _scheduler:
+        return {"error": "Scheduler not initialized"}
+    rid = await _scheduler.add_reminder(
+        chat_id=rem.chat_id, text=rem.text,
+        due_at=rem.due_at, follow_up=rem.follow_up,
+    )
+    return {"id": rid, "saved": True}
+
+
+@router.delete("/reminders/{reminder_id}")
+async def delete_reminder(reminder_id: int):
+    """Delete a reminder."""
+    if not _db or not _db._conn:
+        return {"error": "DB not initialized"}
+    await _db._conn.execute("DELETE FROM reminders WHERE id = ?", (reminder_id,))
+    await _db._conn.commit()
+    return {"deleted": True}
 
 
 # ── LLM Routing ─────────────────────────────────────────────────────

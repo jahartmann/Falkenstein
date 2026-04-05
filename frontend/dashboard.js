@@ -75,6 +75,7 @@ document.querySelectorAll('.sidebar-btn[data-section]').forEach(btn => {
     else if (s === 'chat') loadChat();
     else if (s === 'timeline') loadTimeline();
     else if (s === 'memory') loadMemory();
+    else if (s === 'reminders') loadReminders();
     else if (s === 'toollog') loadToolLog();
     else if (s === 'obsidian') loadObsidian();
     else if (s === 'health') loadHealth();
@@ -381,6 +382,7 @@ const CONFIG_CATEGORIES = {
 };
 const TEXTAREA_KEYS = new Set(['soul_prompt']);
 const PASSWORD_KEYS = new Set(['brave_api_key']);
+const PATH_KEYS = new Set(['obsidian_vault_path', 'workspace_path']);
 
 async function loadConfig() {
   try {
@@ -404,9 +406,15 @@ async function loadConfig() {
       keys.forEach(key => {
         const val = entries[key];
         html += `<div class="config-row"><label>${esc(key)}</label>`;
-        if (TEXTAREA_KEYS.has(key)) html += `<textarea data-key="${esc(key)}" rows="4">${esc(val)}</textarea>`;
-        else if (PASSWORD_KEYS.has(key)) html += `<input type="password" data-key="${esc(key)}" value="${esc(val)}">`;
-        else html += `<input type="text" data-key="${esc(key)}" value="${esc(val)}">`;
+        if (TEXTAREA_KEYS.has(key)) {
+          html += `<textarea data-key="${esc(key)}" rows="4">${esc(val)}</textarea>`;
+        } else if (PASSWORD_KEYS.has(key)) {
+          html += `<input type="password" data-key="${esc(key)}" value="${esc(val)}">`;
+        } else if (PATH_KEYS.has(key)) {
+          html += `<div style="display:flex;gap:6px;flex:1"><input type="text" data-key="${esc(key)}" value="${esc(val)}" style="flex:1"><button class="btn btn-sm" onclick="openFilePicker('${esc(key)}')">Durchsuchen</button></div>`;
+        } else {
+          html += `<input type="text" data-key="${esc(key)}" value="${esc(val)}">`;
+        }
         html += `</div>`;
       });
       html += `<div class="config-actions"><button class="btn btn-primary btn-sm" onclick="saveConfigGroup(this)">Speichern</button></div></div>`;
@@ -430,14 +438,34 @@ async function saveConfigGroup(btn) {
 async function loadSiri() {
   try {
     const data = await api('/siri-info');
-    document.getElementById('siri-token').textContent = data.api_token || '(kein Token konfiguriert)';
-    document.getElementById('siri-url').textContent = data.server_url || 'http://localhost:8800';
-    document.getElementById('siri-telegram-url').textContent = data.telegram_api_url || '';
-    const body = { chat_id: data.telegram_chat_id, text: '[Diktierter Text]' };
-    document.getElementById('siri-telegram-body').textContent = JSON.stringify(body, null, 2);
-    const apiExample = `URL: ${data.server_url}/api/admin/tasks/submit\nMethode: POST\nHeader:\n  Content-Type: application/json\n  Authorization: Bearer ${data.api_token || 'DEIN_TOKEN'}\nBody:\n  {"text": "[Diktierter Text]"}`;
-    document.getElementById('siri-api-example').textContent = apiExample;
+    const token = data.api_token || '';
+    const serverUrl = data.server_url || 'http://localhost:8800';
+    const botUsername = data.bot_username || '';
+    document.getElementById('siri-token').textContent = token || '(kein Token konfiguriert)';
+    document.getElementById('siri-url').textContent = serverUrl;
+
+    // Telegram deep link for the shortcut
+    if (botUsername) {
+      document.getElementById('siri-tg-deeplink').textContent = `https://t.me/${botUsername}?text=[Diktierter Text]`;
+    } else {
+      document.getElementById('siri-tg-deeplink').textContent = '(Bot-Username nicht verfügbar — Telegram Token prüfen)';
+    }
+
+    // Full URL with token for local API access
+    const fullUrl = `${serverUrl}/api/admin/tasks/submit?token=${token}`;
+    document.getElementById('siri-full-url').textContent = fullUrl;
+
+    // API example for local network
+    document.getElementById('siri-api-example').textContent = `URL: ${fullUrl}\nMethode: POST\nHeader: Content-Type: application/json\nBody: {"text": "[Diktierter Text]"}`;
   } catch (e) { console.error('Siri load error:', e); }
+}
+
+function copySiriFullUrl() {
+  const url = document.getElementById('siri-full-url').textContent;
+  navigator.clipboard.writeText(url).then(() => {
+    const btn = event.target;
+    if (btn) { const orig = btn.textContent; btn.textContent = 'Kopiert'; setTimeout(() => { btn.textContent = orig; }, 1500); }
+  });
 }
 
 function copySiriToken() {
@@ -501,16 +529,17 @@ function connectWS() {
       if (['schedule_fired','agent_done'].includes(type)) {
         if (document.getElementById('section-schedules').classList.contains('active')) loadSchedules();
       }
+      // Chat replies via WS
+      if (type === 'chat_reply' && msg.content) {
+        appendChatMessage(msg.role || 'assistant', msg.content);
+      }
     } catch (_) {}
   };
 }
 
 // ── Chat ────────────────────────────────────────────────────────────
-let chatLoaded = false;
 
 async function loadChat() {
-  if (chatLoaded) return;
-  chatLoaded = true;
   try {
     const data = await api('/chat-history?limit=50');
     const el = document.getElementById('chat-messages');
@@ -527,7 +556,29 @@ async function loadChat() {
 function chatBubble(role, content, time) {
   const cls = role === 'user' ? 'chat-msg-user' : 'chat-msg-assistant';
   const label = role === 'user' ? 'Du' : 'Falki';
-  return `<div class="chat-msg ${cls}"><div class="chat-msg-header"><strong>${label}</strong><span class="activity-time">${relTime(time)}</span></div><div class="chat-msg-body">${esc(content)}</div></div>`;
+  let body = esc(content);
+  // Render file attachments
+  const fileMatch = content.match(/\[Datei: (.+?)\]/);
+  if (fileMatch) {
+    const filePath = fileMatch[1];
+    const fileName = filePath.split('/').pop();
+    body = body.replace(
+      esc('[Datei: ' + filePath + ']'),
+      `<div class="chat-file-attachment" onclick="openChatFile('${esc(filePath.replace(/'/g, "\\'"))}')"><span class="file-icon-file"></span> <strong>${esc(fileName)}</strong><span class="text-muted" style="font-size:10px;margin-left:8px">Klicken zum Öffnen</span></div>`
+    );
+  }
+  return `<div class="chat-msg ${cls}"><div class="chat-msg-header"><strong>${label}</strong><span class="activity-time">${relTime(time)}</span></div><div class="chat-msg-body">${body}</div></div>`;
+}
+
+function appendChatMessage(role, content) {
+  const el = document.getElementById('chat-messages');
+  if (!el) return;
+  const empty = el.querySelector('.chat-empty');
+  if (empty) empty.remove();
+  const pending = el.querySelector('.chat-msg-pending');
+  if (pending) pending.remove();
+  el.innerHTML += chatBubble(role, content, new Date().toISOString());
+  el.scrollTop = el.scrollHeight;
 }
 
 async function sendChat() {
@@ -535,18 +586,42 @@ async function sendChat() {
   const text = input.value.trim();
   if (!text) return;
   input.value = '';
+  input.style.height = 'auto';
 
   const el = document.getElementById('chat-messages');
   const emptyMsg = el.querySelector('.chat-empty');
   if (emptyMsg) emptyMsg.remove();
   el.innerHTML += chatBubble('user', text, new Date().toISOString());
+  el.innerHTML += `<div class="chat-msg chat-msg-assistant chat-msg-pending"><div class="chat-msg-header"><strong>Falki</strong><span class="activity-time">jetzt</span></div><div class="chat-msg-body"><span class="typing-indicator">Denkt nach...</span></div></div>`;
   el.scrollTop = el.scrollHeight;
 
   try {
     await api('/tasks/submit', { method: 'POST', body: JSON.stringify({ text }) });
-    el.innerHTML += chatBubble('assistant', 'Wird bearbeitet...', new Date().toISOString());
+  } catch (e) {
+    const pending = el.querySelector('.chat-msg-pending');
+    if (pending) pending.remove();
+    appendChatMessage('assistant', 'Fehler beim Senden.');
+    console.error('Chat send error:', e);
+  }
+}
+
+function shareFileInChat(filePath) {
+  const el = document.getElementById('chat-messages');
+  if (!el) return;
+  navTo('chat');
+  setTimeout(async () => {
+    const text = `Schau dir diese Datei an: ${filePath}`;
+    el.innerHTML += chatBubble('user', `[Datei: ${filePath}]`, new Date().toISOString());
     el.scrollTop = el.scrollHeight;
-  } catch (e) { console.error('Chat send error:', e); }
+    try {
+      await api('/tasks/submit', { method: 'POST', body: JSON.stringify({ text }) });
+    } catch (e) { console.error('Share file error:', e); }
+  }, 100);
+}
+
+function openChatFile(path) {
+  navTo('files');
+  setTimeout(() => openFile(path), 200);
 }
 
 // ── Timeline ────────────────────────────────────────────────────────
@@ -593,37 +668,66 @@ let _memoryData = [];
 async function loadMemory() {
   try {
     const data = await api('/memory');
-    _memoryData = data.facts || [];
+    _memoryData = data.memories || [];
     renderMemory(_memoryData);
   } catch (e) { console.error('Memory load error:', e); }
 }
 
 function filterMemory() {
   const q = document.getElementById('memory-search').value.toLowerCase();
-  const filtered = q ? _memoryData.filter(f => f.content.toLowerCase().includes(q) || f.category.toLowerCase().includes(q)) : _memoryData;
+  const filtered = q ? _memoryData.filter(m =>
+    (m.value || '').toLowerCase().includes(q) ||
+    (m.category || '').toLowerCase().includes(q) ||
+    (m.key || '').toLowerCase().includes(q) ||
+    (m.layer || '').toLowerCase().includes(q)
+  ) : _memoryData;
   renderMemory(filtered);
 }
 
-function renderMemory(facts) {
+function renderMemory(memories) {
   const el = document.getElementById('memory-list');
-  if (facts.length === 0) { el.innerHTML = '<span class="text-muted">Keine Einträge</span>'; return; }
+  if (memories.length === 0) { el.innerHTML = '<span class="text-muted">Keine Einträge</span>'; return; }
 
-  const byCategory = {};
-  for (const f of facts) {
-    const cat = f.category || 'Allgemein';
-    if (!byCategory[cat]) byCategory[cat] = [];
-    byCategory[cat].push(f);
+  const layerLabels = { user: 'User', self: 'Self', relationship: 'Relationship' };
+  const byLayer = {};
+  for (const m of memories) {
+    const layer = m.layer || 'user';
+    if (!byLayer[layer]) byLayer[layer] = {};
+    const cat = m.category || 'general';
+    if (!byLayer[layer][cat]) byLayer[layer][cat] = [];
+    byLayer[layer][cat].push(m);
   }
 
   let html = '';
-  for (const [cat, items] of Object.entries(byCategory)) {
-    html += `<div class="memory-group"><h3>${esc(cat)} <span class="text-muted">(${items.length})</span></h3>`;
-    for (const f of items) {
-      html += `<div class="memory-item"><div class="memory-content">${esc(f.content)}</div><div class="memory-meta"><span class="text-muted">${esc(f.source || '')}</span><button class="btn btn-sm btn-danger" onclick="deleteMemory(${f.id})">×</button></div></div>`;
+  for (const [layer, cats] of Object.entries(byLayer)) {
+    const total = Object.values(cats).reduce((a, b) => a + b.length, 0);
+    html += `<div class="memory-group"><h3>${esc(layerLabels[layer] || layer)} <span class="text-muted">(${total})</span></h3>`;
+    for (const [cat, items] of Object.entries(cats)) {
+      html += `<div style="margin-left:12px;margin-bottom:8px"><h4 style="font-size:12px;color:var(--text-muted);margin-bottom:4px">${esc(cat)}</h4>`;
+      for (const m of items) {
+        const keyStr = m.key ? `<strong>${esc(m.key)}:</strong> ` : '';
+        html += `<div class="memory-item"><div class="memory-content">${keyStr}${esc(m.value)}</div><div class="memory-meta"><span class="text-muted">${esc(m.source || '')}</span><button class="btn btn-sm btn-danger" onclick="deleteMemory(${m.id})">×</button></div></div>`;
+      }
+      html += `</div>`;
     }
     html += `</div>`;
   }
   el.innerHTML = html;
+}
+
+async function addMemory() {
+  const layer = document.getElementById('memory-new-layer').value;
+  const category = document.getElementById('memory-new-category').value.trim();
+  const key = document.getElementById('memory-new-key').value.trim();
+  const value = document.getElementById('memory-new-value').value.trim();
+  if (!value) { alert('Bitte einen Wert eingeben'); return; }
+  try {
+    await api('/memory', { method: 'POST', body: JSON.stringify({ layer, category: category || 'general', key, value }) });
+    document.getElementById('memory-new-category').value = '';
+    document.getElementById('memory-new-key').value = '';
+    document.getElementById('memory-new-value').value = '';
+    loadMemory();
+  } catch (e) { console.error('Add memory error:', e); }
 }
 
 async function deleteMemory(id) {
@@ -632,6 +736,53 @@ async function deleteMemory(id) {
     await api('/memory/' + id, { method: 'DELETE' });
     loadMemory();
   } catch (e) { console.error('Delete memory error:', e); }
+}
+
+// ── Reminders ───────────────────────────────────────────────────────
+
+async function loadReminders() {
+  try {
+    const data = await api('/reminders');
+    const reminders = data.reminders || [];
+    const el = document.getElementById('reminders-list');
+    if (reminders.length === 0) { el.innerHTML = '<span class="text-muted">Keine Erinnerungen</span>'; return; }
+
+    el.innerHTML = reminders.map(r => {
+      const due = new Date(r.due_at);
+      const now = new Date();
+      const isPast = due < now;
+      const statusColor = r.delivered ? 'var(--green)' : isPast ? 'var(--red)' : 'var(--amber)';
+      const statusText = r.delivered ? 'Zugestellt' : isPast ? 'Überfällig' : 'Ausstehend';
+      return `<div class="activity-item" style="border-left:3px solid ${statusColor};padding-left:12px;margin-bottom:8px">
+        <div style="flex:1">
+          <div><strong>${esc(r.text)}</strong></div>
+          <div class="text-muted" style="font-size:11px">Fällig: ${due.toLocaleString('de-DE')} — ${statusText}</div>
+        </div>
+        <button class="btn btn-sm btn-danger" onclick="deleteReminder(${r.id})">×</button>
+      </div>`;
+    }).join('');
+  } catch (e) { console.error('Reminders error:', e); }
+}
+
+async function addReminder() {
+  const text = document.getElementById('reminder-new-text').value.trim();
+  const dueInput = document.getElementById('reminder-new-due').value;
+  if (!text || !dueInput) { alert('Text und Datum sind Pflicht'); return; }
+  const due_at = new Date(dueInput).toISOString();
+  try {
+    await api('/reminders', { method: 'POST', body: JSON.stringify({ text, due_at }) });
+    document.getElementById('reminder-new-text').value = '';
+    document.getElementById('reminder-new-due').value = '';
+    loadReminders();
+  } catch (e) { console.error('Add reminder error:', e); }
+}
+
+async function deleteReminder(id) {
+  if (!confirm('Erinnerung löschen?')) return;
+  try {
+    await api('/reminders/' + id, { method: 'DELETE' });
+    loadReminders();
+  } catch (e) { console.error('Delete reminder error:', e); }
 }
 
 // ── Tool Log ────────────────────────────────────────────────────────
@@ -815,9 +966,9 @@ async function loadFiles(path) {
       const icon = f.is_dir ? 'file-icon-dir' : 'file-icon-file';
       const size = f.is_dir ? '' : formatSize(f.size);
       if (f.is_dir) {
-        return `<div class="file-item" onclick="loadFiles('${esc(f.path)}')"><span class="${icon}"></span><span>${esc(f.name)}</span><span class="activity-time">${size}</span></div>`;
+        return `<div class="file-item" onclick="loadFiles('${esc(f.path)}')"><span class="${icon}"></span><span style="flex:1">${esc(f.name)}</span><span class="activity-time">${size}</span></div>`;
       } else {
-        return `<div class="file-item" onclick="openFile('${esc(f.path)}')"><span class="${icon}"></span><span>${esc(f.name)}</span><span class="activity-time">${size}</span></div>`;
+        return `<div class="file-item"><span class="${icon}" onclick="openFile('${esc(f.path)}')"></span><span style="flex:1;cursor:pointer" onclick="openFile('${esc(f.path)}')">${esc(f.name)}</span><button class="btn btn-sm" onclick="event.stopPropagation();shareFileInChat('${esc(f.path)}')" title="Im Chat teilen" style="padding:2px 6px;font-size:11px">Teilen</button><span class="activity-time">${size}</span></div>`;
       }
     }).join('');
   } catch (e) { console.error('Files error:', e); }
@@ -911,6 +1062,7 @@ const COMMANDS = [
   { name: 'Chat', action: () => navTo('chat'), section: 'chat' },
   { name: 'Timeline', action: () => navTo('timeline'), section: 'timeline' },
   { name: 'Memory', action: () => navTo('memory'), section: 'memory' },
+  { name: 'Erinnerungen', action: () => navTo('reminders'), section: 'reminders' },
   { name: 'Tool Log', action: () => navTo('toollog'), section: 'toollog' },
   { name: 'Obsidian', action: () => navTo('obsidian'), section: 'obsidian' },
   { name: 'System Health', action: () => navTo('health'), section: 'health' },
@@ -949,6 +1101,89 @@ function runCommand(idx) {
   closeModal('modal-command');
   document.getElementById('cmd-input').value = '';
   COMMANDS[idx].action();
+}
+
+// ── File Picker ─────────────────────────────────────────────────────
+let _fpTargetKey = null;
+let _fpCurrentPath = '';
+let _fpWorkspace = '';
+
+function openFilePicker(configKey) {
+  _fpTargetKey = configKey;
+  document.getElementById('file-picker-overlay').style.display = 'flex';
+  document.getElementById('fp-selected-path').value = '';
+  loadFilePicker('');
+}
+
+function closeFilePicker() {
+  document.getElementById('file-picker-overlay').style.display = 'none';
+  _fpTargetKey = null;
+}
+
+async function loadFilePicker(path) {
+  _fpCurrentPath = path;
+  try {
+    const data = await api('/files?path=' + encodeURIComponent(path));
+    if (data.error) { document.getElementById('fp-list').innerHTML = `<span class="text-muted">${esc(data.error)}</span>`; return; }
+    _fpWorkspace = data.workspace || '';
+
+    // Breadcrumb
+    const parts = path ? path.split('/') : [];
+    let bc = `<a class="file-crumb" onclick="loadFilePicker('')">workspace</a>`;
+    let accumulated = '';
+    for (const part of parts) {
+      accumulated += (accumulated ? '/' : '') + part;
+      const p = accumulated;
+      bc += ` / <a class="file-crumb" onclick="loadFilePicker('${esc(p)}')">${esc(part)}</a>`;
+    }
+    document.getElementById('fp-breadcrumb').innerHTML = bc;
+
+    // Update selected path to current directory
+    const fullPath = _fpWorkspace + (path ? '/' + path : '');
+    document.getElementById('fp-selected-path').value = fullPath;
+
+    // Items
+    const items = data.items || [];
+    const el = document.getElementById('fp-list');
+    if (items.length === 0) { el.innerHTML = '<span class="text-muted">Leer</span>'; return; }
+
+    el.innerHTML = items.map(f => {
+      const icon = f.is_dir ? 'file-icon-dir' : 'file-icon-file';
+      if (f.is_dir) {
+        return `<div class="file-item" onclick="loadFilePicker('${esc(f.path)}')" ondblclick="selectPickerPath('${esc(f.path)}', true)"><span class="${icon}"></span><span>${esc(f.name)}</span></div>`;
+      } else {
+        return `<div class="file-item" onclick="selectPickerPath('${esc(f.path)}', false)"><span class="${icon}"></span><span>${esc(f.name)}</span></div>`;
+      }
+    }).join('');
+  } catch (e) { console.error('File picker error:', e); }
+}
+
+function selectPickerPath(relPath, isDir) {
+  const fullPath = _fpWorkspace + '/' + relPath;
+  document.getElementById('fp-selected-path').value = fullPath;
+  if (isDir) loadFilePicker(relPath);
+}
+
+function confirmFilePicker() {
+  const selected = document.getElementById('fp-selected-path').value;
+  if (!selected) { closeFilePicker(); return; }
+  if (_fpTargetKey === '__chat__') {
+    closeFilePicker();
+    shareFileInChat(selected);
+    return;
+  }
+  if (_fpTargetKey) {
+    const input = document.querySelector(`[data-key="${_fpTargetKey}"]`);
+    if (input) input.value = selected;
+  }
+  closeFilePicker();
+}
+
+function openChatFilePicker() {
+  _fpTargetKey = '__chat__';
+  document.getElementById('file-picker-overlay').style.display = 'flex';
+  document.getElementById('fp-selected-path').value = '';
+  loadFilePicker('');
 }
 
 // Init

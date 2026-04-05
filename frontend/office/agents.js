@@ -21,7 +21,7 @@ const NPC_EMPLOYEES = [
   { id: 'npc-anna',   name: 'Anna',   sprite: 'Alex',   room: 'Gemeinschaftsraum', role: 'UX Research' },
 ];
 
-const WALK_SPEED = 120; // ms per tile
+const WALK_SPEED = 400; // ms per tile
 const PAUSE_ROOMS = ['Küche', 'Lounge', 'Gemeinschaftsraum'];
 
 export class AgentManager {

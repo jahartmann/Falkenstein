@@ -640,7 +640,8 @@ class MainAgent:
 
     async def handle_message(self, text: str, chat_id: str = "",
                              agent_type_hint: str | None = None,
-                             project_hint: str | None = None):
+                             project_hint: str | None = None,
+                             image_path: str | None = None):
         # Check for /commands first (no LLM call needed)
         cmd_response = await self._handle_command(text, chat_id)
         if cmd_response is not None:
@@ -649,6 +650,11 @@ class MainAgent:
             return
 
         text = text.strip()
+
+        # Handle image analysis directly if image provided
+        if image_path:
+            await self._handle_image(text, chat_id, image_path)
+            return
 
         # Prompt injection guard — runs before any LLM call
         guard_result = self._input_guard.check_patterns(text)
@@ -703,11 +709,15 @@ class MainAgent:
                     await self.scheduler.add_reminder(
                         chat_id=chat_id, text=intent.enriched_prompt, due_at=time_expr,
                     )
+                    confirm_msg = f"Erinnerung eingerichtet: {intent.enriched_prompt}"
+                    await self.db.append_chat(chat_id or "default", "assistant", confirm_msg)
+                    if self.ws_callback:
+                        await self.ws_callback({
+                            "type": "chat_reply", "role": "assistant",
+                            "content": confirm_msg, "chat_id": chat_id or "default",
+                        })
                     if self.telegram:
-                        await self.telegram.send_message(
-                            f"Erinnerung eingerichtet: {intent.enriched_prompt}",
-                            chat_id=chat_id or None,
-                        )
+                        await self.telegram.send_message(confirm_msg, chat_id=chat_id or None)
                     return
                 if intent.type == "planned_task" and intent.steps and self.scheduler:
                     steps = [{"agent_prompt": s["prompt"], "scheduled_at": s.get("scheduled_at")} for s in intent.steps]
@@ -754,6 +764,11 @@ class MainAgent:
                 except Exception:
                     pass
             await self.db.append_chat(chat_id or "default", "assistant", answer)
+            if self.ws_callback:
+                await self.ws_callback({
+                    "type": "chat_reply", "role": "assistant",
+                    "content": answer, "chat_id": chat_id or "default",
+                })
             if self.telegram:
                 await self.telegram.send_message(answer[:4000], chat_id=chat_id or None)
             # Fire-and-forget: extract memories from this exchange
@@ -792,6 +807,31 @@ class MainAgent:
             self._pending_tasks[id(task)] = task
             task.add_done_callback(lambda t: self._pending_tasks.pop(id(t), None))
             return classification.get("title", "Ops gestartet")
+
+    async def _handle_image(self, text: str, chat_id: str, image_path: str):
+        """Analyze an image using the LLM's vision capability."""
+        question = text if text else "Was siehst du auf diesem Bild? Beschreibe es detailliert."
+        await self.db.append_chat(
+            chat_id or "default", "user",
+            f"[Bild gesendet] {question}" if text else "[Bild gesendet]",
+        )
+        try:
+            response = await self.llm.analyze_image(image_path, question)
+            await self.db.append_chat(chat_id or "default", "assistant", response)
+            if self.ws_callback:
+                await self.ws_callback({
+                    "type": "chat_reply", "role": "assistant",
+                    "content": response, "chat_id": chat_id or "default",
+                })
+            if self.telegram:
+                await self.telegram.send_message(
+                    response[:4000], chat_id=chat_id or None,
+                )
+        except Exception as e:
+            error_msg = f"Bildanalyse fehlgeschlagen: {e}"
+            await self.db.append_chat(chat_id or "default", "assistant", error_msg)
+            if self.telegram:
+                await self.telegram.send_message(error_msg, chat_id=chat_id or None)
 
     def _get_llm_for(self, task_type: str):
         """Get the right LLM for a task type via router, fallback to default."""
@@ -841,10 +881,16 @@ class MainAgent:
             if self.ws_callback:
                 await self.ws_callback({"type": "task_created", "task_id": task_id, "title": title})
 
+            start_msg = f"Mache ich: {title}"
+            await self.db.append_chat(chat_id or "default", "assistant", start_msg)
+            if self.ws_callback:
+                await self.ws_callback({
+                    "type": "chat_reply", "role": "assistant",
+                    "content": start_msg, "chat_id": chat_id or "default",
+                })
             if self.telegram:
                 await self.telegram.send_message(
-                    f"👍 Mache ich: {title}",
-                    chat_id=chat_id or None,
+                    f"👍 {start_msg}", chat_id=chat_id or None,
                 )
 
             await self.db.update_task_status(task_id, TaskStatus.IN_PROGRESS, agent_type)
@@ -896,6 +942,15 @@ class MainAgent:
 
                 await self.db.update_task_result(task_id, result[:5000])
                 await self.db.update_task_status(task_id, TaskStatus.DONE)
+
+                # Save to chat history and broadcast
+                reply_text = f"Erledigt: {title}\n\n{result[:2000]}"
+                await self.db.append_chat(chat_id or "default", "assistant", reply_text)
+                if self.ws_callback:
+                    await self.ws_callback({
+                        "type": "chat_reply", "role": "assistant",
+                        "content": reply_text, "chat_id": chat_id or "default",
+                    })
 
                 if self.telegram:
                     summary = result[:500] + ("..." if len(result) > 500 else "")
@@ -955,11 +1010,17 @@ class MainAgent:
             if self.ws_callback:
                 await self.ws_callback({"type": "task_created", "task_id": task_id, "title": title})
 
-            # 2. Send confirmation to Telegram
+            # 2. Send confirmation
+            start_msg = f"Arbeite daran: {title} (Agent: {agent_type})"
+            await self.db.append_chat(chat_id or "default", "assistant", start_msg)
+            if self.ws_callback:
+                await self.ws_callback({
+                    "type": "chat_reply", "role": "assistant",
+                    "content": start_msg, "chat_id": chat_id or "default",
+                })
             if self.telegram:
                 await self.telegram.send_message(
-                    f"👍 Arbeite daran: {title}\n🤖 Agent: {agent_type}",
-                    chat_id=chat_id or None,
+                    f"👍 {start_msg}", chat_id=chat_id or None,
                 )
 
             await self.db.update_task_status(task_id, TaskStatus.IN_PROGRESS, agent_type)
@@ -1012,6 +1073,15 @@ class MainAgent:
                 # 4. Update DB with result
                 await self.db.update_task_result(task_id, result[:5000])
                 await self.db.update_task_status(task_id, TaskStatus.DONE)
+
+                # Save to chat history and broadcast
+                reply_text = f"Fertig: {title}\n\n{result[:2000]}"
+                await self.db.append_chat(chat_id or "default", "assistant", reply_text)
+                if self.ws_callback:
+                    await self.ws_callback({
+                        "type": "chat_reply", "role": "assistant",
+                        "content": reply_text, "chat_id": chat_id or "default",
+                    })
 
                 # 5. Write result to Obsidian if enabled
                 if self._obsidian_enabled():

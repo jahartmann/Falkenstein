@@ -48,7 +48,6 @@ budget_tracker: CLIBudgetTracker = None
 llm_router: LLMRouter = None
 telegram_task: asyncio.Task = None
 scheduler: SmartScheduler = None
-scheduler_task: asyncio.Task = None
 
 # External agents (Claude Code subagents etc.) — TTL-based, auto-expire after 60s
 _external_agents: dict[str, dict] = {}
@@ -62,15 +61,42 @@ class ExternalAgentIn(BaseModel):
 
 
 async def handle_telegram_message(msg: dict):
-    """All Telegram messages go through MainAgent — including /commands."""
-    text = msg["text"].strip()
+    """All Telegram messages go through MainAgent — including /commands, voice, images."""
+    text = (msg.get("text") or "").strip()
     chat_id = msg.get("chat_id", "")
-    await main_agent.handle_message(text, chat_id=chat_id)
+
+    # Voice message → transcribe with Whisper, then process as text
+    voice_path = msg.get("voice_path")
+    if voice_path:
+        from backend.stt import transcribe
+        if telegram and telegram.enabled:
+            await telegram.send_message("Transkribiere...", chat_id=chat_id or None)
+        transcribed = await transcribe(voice_path)
+        if transcribed:
+            # Combine with any caption
+            full_text = f"{text} {transcribed}".strip() if text else transcribed
+            await main_agent.handle_message(full_text, chat_id=chat_id)
+        else:
+            if telegram and telegram.enabled:
+                await telegram.send_message(
+                    "Konnte die Sprachnachricht nicht verstehen.", chat_id=chat_id or None,
+                )
+        return
+
+    # Image → analyze with vision
+    image_path = msg.get("image_path")
+    if image_path:
+        await main_agent.handle_message(text, chat_id=chat_id, image_path=image_path)
+        return
+
+    # Regular text
+    if text:
+        await main_agent.handle_message(text, chat_id=chat_id)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global db, telegram, telegram_task, main_agent, budget_tracker, scheduler, scheduler_task, fact_memory, soul_memory, llm_router
+    global db, telegram, telegram_task, main_agent, budget_tracker, scheduler, fact_memory, soul_memory, llm_router
 
     # 1. Database
     db = Database(DB_PATH)
@@ -134,7 +160,12 @@ async def lifespan(app: FastAPI):
         owner_chat_id=TELEGRAM_CHAT_ID,
         allowed_ids_csv=TELEGRAM_ALLOWED_CHAT_IDS,
     )
-    telegram = TelegramBot(token=TELEGRAM_TOKEN, chat_id=TELEGRAM_CHAT_ID, allowlist=allowlist)
+    media_dir = workspace / "_media"
+    media_dir.mkdir(parents=True, exist_ok=True)
+    telegram = TelegramBot(
+        token=TELEGRAM_TOKEN, chat_id=TELEGRAM_CHAT_ID,
+        allowlist=allowlist, download_dir=media_dir,
+    )
 
     # 8. Scheduler (DB-backed, smart)
     scheduler = SmartScheduler(db)
@@ -165,13 +196,21 @@ async def lifespan(app: FastAPI):
         db=db, scheduler=scheduler, config_service=config_service,
         main_agent=main_agent, budget_tracker=budget_tracker,
         llm_router=llm_router, fact_memory=fact_memory,
+        soul_memory=soul_memory,
     )
     admin_api.init(start_time=_time.time())
 
     # 12. Start Scheduler with reminder/step handlers
     async def handle_reminder(reminder):
+        text = f"Erinnerung: {reminder['text']}"
+        # Broadcast to dashboard
+        await ws_mgr.broadcast({
+            "type": "chat_reply", "role": "assistant",
+            "content": text, "chat_id": reminder.get("chat_id", "dashboard"),
+        })
+        await db.append_chat(reminder.get("chat_id") or "default", "assistant", text)
+        # Send via Telegram
         if telegram and telegram.enabled:
-            text = f"Erinnerung: {reminder['text']}"
             await telegram.send_message(text, chat_id=reminder.get('chat_id'))
             if reminder.get('follow_up'):
                 await telegram.send_message("Soll ich dazu was machen?", chat_id=reminder.get('chat_id'))
@@ -181,12 +220,10 @@ async def lifespan(app: FastAPI):
             step['agent_prompt'], chat_id=step.get('chat_id', ''),
         )
 
-    scheduler_task = asyncio.create_task(
-        scheduler.start(
-            on_task_due=main_agent.handle_scheduled,
-            on_reminder_due=handle_reminder,
-            on_step_due=handle_step,
-        )
+    await scheduler.start(
+        on_task_due=main_agent.handle_scheduled,
+        on_reminder_due=handle_reminder,
+        on_step_due=handle_step,
     )
     print("Scheduler active")
 
@@ -206,12 +243,8 @@ async def lifespan(app: FastAPI):
             await telegram_task
         except asyncio.CancelledError:
             pass
-    if scheduler_task:
-        scheduler_task.cancel()
-        try:
-            await scheduler_task
-        except asyncio.CancelledError:
-            pass
+    if scheduler:
+        await scheduler.stop()
     await db.close()
 
 

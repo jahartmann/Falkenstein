@@ -2,7 +2,10 @@
 from __future__ import annotations
 import asyncio
 import datetime
+import logging
 from backend.scheduler import Scheduler, parse_schedule, next_run, _is_in_active_hours, _parse_active_hours
+
+log = logging.getLogger(__name__)
 
 
 class SmartScheduler(Scheduler):
@@ -16,12 +19,36 @@ class SmartScheduler(Scheduler):
     # ── Reminders ────────────────────────────────────────────
 
     async def add_reminder(self, chat_id: str, text: str, due_at: str, follow_up: bool = False) -> int:
+        # Normalize due_at to ISO format without timezone issues
+        normalized = self._normalize_datetime(due_at)
         cursor = await self._db._conn.execute(
             "INSERT INTO reminders (chat_id, text, due_at, follow_up) VALUES (?, ?, ?, ?)",
-            (chat_id, text, due_at, int(follow_up)),
+            (chat_id, text, normalized, int(follow_up)),
         )
         await self._db._conn.commit()
         return cursor.lastrowid
+
+    @staticmethod
+    def _normalize_datetime(dt_str: str) -> str:
+        """Parse various datetime formats and return consistent ISO string (local time, no tz)."""
+        if not dt_str:
+            return datetime.datetime.now().isoformat()
+        # Try parsing common formats
+        for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f",
+                    "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M",
+                    "%d.%m.%Y %H:%M", "%d.%m.%Y"):
+            try:
+                dt = datetime.datetime.strptime(dt_str.replace("Z", "").split("+")[0], fmt)
+                return dt.isoformat()
+            except ValueError:
+                continue
+        # If ISO with timezone info, strip it
+        try:
+            dt = datetime.datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+            return dt.replace(tzinfo=None).isoformat()
+        except (ValueError, TypeError):
+            pass
+        return dt_str  # Return as-is as last resort
 
     async def get_due_reminders(self, now: datetime.datetime | None = None) -> list[dict]:
         now = now or datetime.datetime.now()
@@ -89,6 +116,8 @@ class SmartScheduler(Scheduler):
     # ── Extended tick loop ───────────────────────────────────
 
     async def _tick_loop(self) -> None:
+        log.info("SmartScheduler tick loop started")
+        consecutive_errors = 0
         while self._running:
             try:
                 # Original schedule checks
@@ -100,17 +129,38 @@ class SmartScheduler(Scheduler):
                 # Reminders
                 due_reminders = await self.get_due_reminders()
                 for reminder in due_reminders:
+                    # Mark delivered FIRST to prevent duplicate delivery on crash
                     await self.mark_reminder_delivered(reminder["id"])
                     if self._on_reminder_due:
-                        asyncio.create_task(self._on_reminder_due(reminder))
+                        try:
+                            asyncio.create_task(self._on_reminder_due(reminder))
+                        except Exception as e:
+                            log.error(f"Reminder dispatch failed for #{reminder['id']}: {e}")
                 # Planned task steps
                 due_steps = await self.get_due_steps()
                 for step in due_steps:
+                    await self.mark_step_completed(step["id"], result="dispatched")
                     if self._on_step_due:
-                        asyncio.create_task(self._on_step_due(step))
+                        try:
+                            asyncio.create_task(self._on_step_due(step))
+                        except Exception as e:
+                            log.error(f"Step dispatch failed for #{step['id']}: {e}")
+                consecutive_errors = 0
+            except asyncio.CancelledError:
+                log.info("SmartScheduler tick loop cancelled")
+                return
             except Exception as e:
-                print(f"SmartScheduler error: {e}")
-            await asyncio.sleep(60)
+                consecutive_errors += 1
+                log.error(f"SmartScheduler tick error ({consecutive_errors}): {e}")
+                if consecutive_errors >= 10:
+                    log.critical("SmartScheduler: 10 consecutive errors, backing off")
+            try:
+                # Back off on repeated errors (max 5 min)
+                sleep_time = min(60 * (2 ** min(consecutive_errors, 3)), 300) if consecutive_errors > 0 else 30
+                await asyncio.sleep(sleep_time)
+            except asyncio.CancelledError:
+                log.info("SmartScheduler sleep cancelled")
+                return
 
     async def start(self, on_task_due=None, on_reminder_due=None, on_step_due=None) -> None:
         self._on_task_due = on_task_due
@@ -119,3 +169,14 @@ class SmartScheduler(Scheduler):
         self._running = True
         await self.load_tasks()
         self._task = asyncio.create_task(self._tick_loop())
+
+    async def stop(self) -> None:
+        """Graceful shutdown."""
+        self._running = False
+        if self._task and not self._task.done():
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+        log.info("SmartScheduler stopped")

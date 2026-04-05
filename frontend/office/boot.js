@@ -29,7 +29,7 @@ export class BootScene extends Phaser.Scene {
       for (const anim of CHAR_ANIMS) {
         const key = `${name}_${anim}`;
         const url = `/static/assets/characters/${name}_${anim}_16x16.png`;
-        this.load.spritesheet(key, url, { frameWidth: 16, frameHeight: 16 });
+        this.load.spritesheet(key, url, { frameWidth: 16, frameHeight: 32 });
       }
     }
 

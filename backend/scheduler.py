@@ -263,7 +263,7 @@ class Scheduler:
         self._task = asyncio.create_task(self._tick_loop())
 
     async def _tick_loop(self) -> None:
-        """Every 60s, check for due tasks, dispatch via create_task."""
+        """Every 30s, check for due tasks, dispatch via create_task."""
         while self._running:
             try:
                 due = self.get_due_tasks()
@@ -271,9 +271,14 @@ class Scheduler:
                     await self.mark_run(task)
                     if self._on_task_due:
                         asyncio.create_task(self._on_task_due(task))
+            except asyncio.CancelledError:
+                return
             except Exception as e:
                 print(f"Scheduler error: {e}")
-            await asyncio.sleep(60)
+            try:
+                await asyncio.sleep(30)
+            except asyncio.CancelledError:
+                return
 
     async def stop(self) -> None:
         self._running = False

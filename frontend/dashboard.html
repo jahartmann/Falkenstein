@@ -43,6 +43,11 @@
             <circle cx="10" cy="10" r="7"/><circle cx="10" cy="10" r="3"/><path d="M10 3v4M10 13v4M3 10h4M13 10h4"/>
           </svg>
         </button>
+        <button class="sidebar-btn" data-section="reminders" title="Erinnerungen">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M10 2a6 6 0 016 6c0 3.5 1 5 1 5H3s1-1.5 1-5a6 6 0 016-6zM8 15a2 2 0 004 0"/>
+          </svg>
+        </button>
         <button class="sidebar-btn" data-section="toollog" title="Tool Log">
           <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
             <path d="M4 4h12M4 8h12M4 12h8M4 16h5"/><circle cx="15" cy="14" r="3"/>
@@ -190,11 +195,16 @@
 
       <!-- Chat Section -->
       <section class="section" id="section-chat">
-        <div class="section-header"><h1>Chat</h1></div>
+        <div class="section-header"><h1>Chat</h1><button class="btn" onclick="loadChat()">Aktualisieren</button></div>
         <div class="chat-container">
           <div class="chat-messages" id="chat-messages"></div>
           <div class="chat-input-bar">
-            <textarea id="chat-input" rows="1" placeholder="Nachricht an Falki..." onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendChat()}"></textarea>
+            <button class="btn btn-sm chat-attach-btn" onclick="openChatFilePicker()" title="Datei teilen">
+              <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M14.5 11.5l-5-5a2.12 2.12 0 00-3 3l5 5a3.54 3.54 0 005-5l-5-5a4.95 4.95 0 00-7 7l5 5"/>
+              </svg>
+            </button>
+            <textarea id="chat-input" rows="1" placeholder="Nachricht an Falki..." onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendChat()}" oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,120)+'px'"></textarea>
             <button class="btn btn-primary" onclick="sendChat()">Senden</button>
           </div>
         </div>
@@ -208,11 +218,51 @@
 
       <!-- Memory Section -->
       <section class="section" id="section-memory">
-        <div class="section-header"><h1>Memory</h1></div>
+        <div class="section-header"><h1>Memory</h1><button class="btn" onclick="loadMemory()">Aktualisieren</button></div>
         <div class="filter-bar">
           <input type="text" id="memory-search" placeholder="Memory durchsuchen..." oninput="filterMemory()">
         </div>
+        <div class="panel" style="margin-bottom:16px">
+          <h3>Neuen Eintrag hinzufügen</h3>
+          <div class="config-row" style="margin-bottom:8px">
+            <label>Layer</label>
+            <select id="memory-new-layer">
+              <option value="user">User</option><option value="self">Self</option><option value="relationship">Relationship</option>
+            </select>
+          </div>
+          <div class="config-row" style="margin-bottom:8px">
+            <label>Kategorie</label>
+            <input type="text" id="memory-new-category" placeholder="z.B. preferences, interests, habits...">
+          </div>
+          <div class="config-row" style="margin-bottom:8px">
+            <label>Key</label>
+            <input type="text" id="memory-new-key" placeholder="Kurzer Schlüssel...">
+          </div>
+          <div class="config-row" style="margin-bottom:8px">
+            <label>Wert</label>
+            <textarea id="memory-new-value" rows="2" placeholder="Beschreibung..."></textarea>
+          </div>
+          <div class="config-actions"><button class="btn btn-primary btn-sm" onclick="addMemory()">Speichern</button></div>
+        </div>
         <div id="memory-list" class="memory-list"></div>
+      </section>
+
+      <!-- Reminders Section -->
+      <section class="section" id="section-reminders">
+        <div class="section-header"><h1>Erinnerungen</h1><button class="btn" onclick="loadReminders()">Aktualisieren</button></div>
+        <div class="panel" style="margin-bottom:16px">
+          <h3>Neue Erinnerung</h3>
+          <div class="config-row" style="margin-bottom:8px">
+            <label>Text</label>
+            <input type="text" id="reminder-new-text" placeholder="Woran soll ich erinnern?">
+          </div>
+          <div class="config-row" style="margin-bottom:8px">
+            <label>Fällig am</label>
+            <input type="datetime-local" id="reminder-new-due">
+          </div>
+          <div class="config-actions"><button class="btn btn-primary btn-sm" onclick="addReminder()">Erstellen</button></div>
+        </div>
+        <div id="reminders-list"></div>
       </section>
 
       <!-- Tool Log Section -->
@@ -304,9 +354,16 @@
               <button class="btn btn-sm" onclick="copySiriToken()">Kopieren</button>
             </div>
           </div>
-          <div class="config-row">
+          <div class="config-row" style="margin-bottom:12px">
             <label>Server URL</label>
             <code id="siri-url" style="background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);padding:6px 10px;font-size:13px;display:block">Laden...</code>
+          </div>
+          <div class="config-row">
+            <label>Shortcut-URL (komplett)</label>
+            <div style="display:flex;gap:8px;align-items:center">
+              <code id="siri-full-url" style="background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);padding:6px 10px;font-size:12px;flex:1;word-break:break-all">Laden...</code>
+              <button class="btn btn-sm" onclick="copySiriFullUrl()">Kopieren</button>
+            </div>
           </div>
         </div>
         <div class="panel" style="margin-bottom:16px">
@@ -316,47 +373,52 @@
               <div class="step-number">1</div>
               <div class="step-content">
                 <strong>Shortcuts-App öffnen</strong>
-                <p>Tippe auf + um einen neuen Shortcut zu erstellen.</p>
+                <p>Tippe auf <strong>+</strong> um einen neuen Shortcut zu erstellen. Benenne ihn <strong>"Falkenstein"</strong>.</p>
               </div>
             </div>
             <div class="siri-step">
               <div class="step-number">2</div>
               <div class="step-content">
-                <strong>Diktieren-Aktion hinzufügen</strong>
-                <p>Aktion "Diktieren" hinzufügen (Spracheingabe) — Alternative: "Nach Eingabe fragen"</p>
+                <strong>"Text diktieren" hinzufügen</strong>
+                <p>Suche nach <strong>"Text diktieren"</strong> und füge die Aktion hinzu. Sprache auf <strong>Deutsch</strong> stellen.</p>
+                <p class="text-muted" style="font-size:12px;margin-top:4px">Alternative: "Nach Eingabe fragen" für Text-Eingabe statt Sprache.</p>
               </div>
             </div>
             <div class="siri-step">
               <div class="step-number">3</div>
               <div class="step-content">
-                <strong>URL abrufen (Telegram)</strong>
-                <p>Aktion "URL abrufen" → POST an Telegram Bot API sendMessage:</p>
-                <p style="margin-top:6px"><strong>URL:</strong></p>
-                <pre id="siri-telegram-url">Laden...</pre>
-                <p><strong>Body (JSON):</strong></p>
-                <pre id="siri-telegram-body">Laden...</pre>
+                <strong>"URL öffnen" hinzufügen</strong>
+                <p>Suche nach <strong>"URL öffnen"</strong> und setze als URL:</p>
+                <div style="margin-top:8px">
+                  <pre id="siri-tg-deeplink" style="font-size:12px;word-break:break-all">Laden...</pre>
+                  <p class="text-muted" style="font-size:12px;margin-top:8px">Bei <strong>[Diktierter Text]</strong> die Variable aus der Leiste über der Tastatur auswählen. Telegram öffnet sich mit dem Bot-Chat und der Nachricht — du musst nur noch auf Senden tippen.</p>
+                </div>
               </div>
             </div>
             <div class="siri-step">
               <div class="step-number">4</div>
               <div class="step-content">
-                <strong>Shortcut benennen</strong>
-                <p>Shortcut "Falkenstein" benennen → dann einfach "Hey Siri, Falkenstein" sagen.</p>
-              </div>
-            </div>
-            <div class="siri-step">
-              <div class="step-number">5</div>
-              <div class="step-content">
-                <strong>Optional: Widget / Home Screen</strong>
-                <p>Shortcut als Widget auf dem Home Screen platzieren für schnellen Zugriff.</p>
+                <strong>Fertig!</strong>
+                <p>Sage <strong>"Hey Siri, Falkenstein"</strong> — diktiere deine Nachricht — Telegram öffnet sich — tippe Senden — Falki antwortet.</p>
+                <p class="text-muted" style="font-size:12px;margin-top:4px">Tipp: Shortcut als Widget auf dem Home Screen platzieren.</p>
               </div>
             </div>
           </div>
         </div>
+        <div class="panel" style="margin-bottom:16px">
+          <h2>So funktioniert es</h2>
+          <div style="font-size:13px;color:var(--text-secondary);line-height:1.6">
+            <p><strong>1.</strong> Siri nimmt deine Sprache auf und wandelt sie in Text um.</p>
+            <p><strong>2.</strong> Der Shortcut öffnet Telegram mit dem Bot-Chat und der Nachricht.</p>
+            <p><strong>3.</strong> Du tippst auf Senden — die Nachricht geht als normale Telegram-Nachricht an den Bot.</p>
+            <p><strong>4.</strong> Der Bot verarbeitet die Nachricht und antwortet direkt im Chat.</p>
+            <p style="margin-top:8px;color:var(--green)"><strong>Funktioniert von überall</strong> — Zuhause, unterwegs, im Ausland. Solange du Internet hast.</p>
+          </div>
+        </div>
         <div class="panel">
-          <h2>Alternative: Direkte API</h2>
-          <p style="font-size:13px;color:var(--text-secondary);margin-bottom:12px">Statt Telegram kann auch direkt die Admin-API angesteuert werden:</p>
-          <pre id="siri-api-example">Laden...</pre>
+          <h2>Alternative: Direkte API (nur im lokalen Netzwerk)</h2>
+          <p style="font-size:13px;color:var(--text-secondary);margin-bottom:8px">Wenn du Zuhause bist, kann der Shortcut auch direkt die API ansprechen (ohne Telegram-Umweg):</p>
+          <pre id="siri-api-example" style="font-size:12px;word-break:break-all">Laden...</pre>
         </div>
       </section>
     </main>
@@ -409,6 +471,22 @@
     <div class="modal command-palette">
       <input type="text" id="cmd-input" placeholder="Befehl suchen..." oninput="filterCommands()" autofocus>
       <div id="cmd-list" class="cmd-list"></div>
+    </div>
+  </div>
+
+  <!-- File Picker Modal -->
+  <div class="modal-overlay" id="file-picker-overlay" style="display:none" onclick="closeFilePicker()">
+    <div class="modal" onclick="event.stopPropagation()" style="width:500px;max-height:70vh">
+      <div class="modal-header">
+        <h2>Pfad auswählen</h2>
+        <button class="btn btn-sm" onclick="closeFilePicker()">×</button>
+      </div>
+      <div class="file-breadcrumb" id="fp-breadcrumb" style="padding:8px 16px;border-bottom:1px solid var(--border)"></div>
+      <div id="fp-list" style="overflow-y:auto;max-height:50vh;padding:8px 16px"></div>
+      <div style="padding:12px 16px;border-top:1px solid var(--border);display:flex;gap:8px;align-items:center">
+        <input type="text" id="fp-selected-path" style="flex:1" readonly placeholder="Pfad auswählen...">
+        <button class="btn btn-primary btn-sm" onclick="confirmFilePicker()">Übernehmen</button>
+      </div>
     </div>
   </div>
 
