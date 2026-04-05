@@ -209,11 +209,14 @@ async def lifespan(app: FastAPI):
             "content": text, "chat_id": reminder.get("chat_id", "dashboard"),
         })
         await db.append_chat(reminder.get("chat_id") or "default", "assistant", text)
-        # Send via Telegram
+        # Send via Telegram (use stored chat_id only if it's a numeric Telegram ID)
         if telegram and telegram.enabled:
-            await telegram.send_message(text, chat_id=reminder.get('chat_id'))
+            tg_chat_id = reminder.get('chat_id')
+            if tg_chat_id and not tg_chat_id.lstrip('-').isdigit():
+                tg_chat_id = None  # fall back to default Telegram chat_id
+            await telegram.send_message(text, chat_id=tg_chat_id)
             if reminder.get('follow_up'):
-                await telegram.send_message("Soll ich dazu was machen?", chat_id=reminder.get('chat_id'))
+                await telegram.send_message("Soll ich dazu was machen?", chat_id=tg_chat_id)
 
     async def handle_step(step):
         await main_agent.handle_message(

@@ -51,9 +51,44 @@ else
     echo -e "${YELLOW}Hinweis: Ollama nicht installiert. Siehe https://ollama.ai${NC}"
 fi
 
-# 7. Start
-echo -e "${GREEN}Starte Falkenstein auf Port $(grep FRONTEND_PORT .env 2>/dev/null | cut -d= -f2 || echo 8080)...${NC}"
-echo -e "Dashboard: http://localhost:$(grep FRONTEND_PORT .env 2>/dev/null | cut -d= -f2 || echo 8080)"
-echo -e "Büro:      http://localhost:$(grep FRONTEND_PORT .env 2>/dev/null | cut -d= -f2 || echo 8080)/office"
+# 7. Git-Pull Watcher (background): checks every 60s, restarts server on changes
+_git_watch() {
+    while true; do
+        sleep 60
+        OLD_HEAD=$(git rev-parse HEAD 2>/dev/null)
+        git pull --ff-only -q 2>/dev/null || continue
+        NEW_HEAD=$(git rev-parse HEAD 2>/dev/null)
+        if [ "$OLD_HEAD" != "$NEW_HEAD" ]; then
+            echo -e "\n${GREEN}[Git] Neue Änderungen gezogen. Server wird neugestartet...${NC}"
+            pip install -q -r requirements.txt 2>/dev/null
+            kill $SERVER_PID 2>/dev/null
+        fi
+    done
+}
+
+# 8. Start (auto-restart loop)
+PORT=$(grep FRONTEND_PORT .env 2>/dev/null | cut -d= -f2 || echo 8080)
+echo -e "${GREEN}Starte Falkenstein auf Port ${PORT}...${NC}"
+echo -e "Dashboard: http://localhost:${PORT}"
+echo -e "Büro:      http://localhost:${PORT}/office"
 echo ""
-python -m backend.main
+
+# Trap SIGINT (Ctrl+C) to kill watcher and exit cleanly
+trap 'echo -e "\n${YELLOW}Server gestoppt.${NC}"; kill $WATCHER_PID 2>/dev/null; exit 0' INT
+
+while true; do
+    python -m backend.main &
+    SERVER_PID=$!
+
+    # Start git watcher on first loop
+    if [ -z "$WATCHER_PID" ]; then
+        _git_watch &
+        WATCHER_PID=$!
+    fi
+
+    wait $SERVER_PID
+    EXIT_CODE=$?
+
+    echo -e "\n${YELLOW}Server beendet (Exit $EXIT_CODE). Neustart in 2s...${NC}"
+    sleep 2
+done
