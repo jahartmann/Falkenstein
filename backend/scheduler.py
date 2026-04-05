@@ -195,6 +195,7 @@ class Scheduler:
         """Load all schedules from DB, compute next_run for each."""
         rows = await self._db.get_all_schedules()
         self.tasks = []
+        now = datetime.datetime.now()
         for row in rows:
             parsed = parse_schedule(row["schedule"])
             last_run = (
@@ -203,11 +204,13 @@ class Scheduler:
                 else None
             )
             active_hours = _parse_active_hours(row.get("active_hours"))
-            nr = (
-                next_run(parsed, last_run or datetime.datetime.now())
-                if row["active"]
-                else None
-            )
+            if row["active"]:
+                # Always compute next_run from the later of last_run and now
+                # to prevent firing missed past runs on startup
+                base = max(last_run, now) if last_run else now
+                nr = next_run(parsed, base)
+            else:
+                nr = None
             task = {
                 **row,
                 "_parsed": parsed,
