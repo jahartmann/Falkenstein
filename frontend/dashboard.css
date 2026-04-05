@@ -120,3 +120,17 @@ label { display: block; font-size: 12px; color: var(--text-muted); margin-bottom
 .pagination { display: flex; justify-content: center; padding: 12px; gap: 8px; align-items: center; }
 @media (max-width: 900px) { .stats-row { grid-template-columns: repeat(2, 1fr); } .panels { grid-template-columns: 1fr; } .config-row { grid-template-columns: 1fr; } }
 @media (max-width: 600px) { .sidebar { width: 44px; } .sidebar-btn { width: 32px; height: 32px; } .content { margin-left: 44px; } .section { padding: 16px; } .filter-bar { flex-direction: column; } }
+
+/* Siri Shortcut Steps */
+.siri-steps { display: flex; flex-direction: column; gap: 16px; }
+.siri-step { display: flex; gap: 12px; align-items: flex-start; }
+.step-number {
+  width: 28px; height: 28px; border-radius: 50%;
+  background: var(--accent); color: var(--bg);
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 600; font-size: 14px; flex-shrink: 0;
+}
+.step-content { flex: 1; }
+.step-content p { margin: 4px 0; font-size: 13px; color: var(--text-secondary); }
+.step-content pre { margin: 8px 0; padding: 8px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; white-space: pre-wrap; word-break: break-all; font-size: 12px; color: var(--text-secondary); }
+.token-display { display: inline-block; }

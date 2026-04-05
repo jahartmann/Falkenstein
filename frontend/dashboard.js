@@ -71,6 +71,7 @@ document.querySelectorAll('.sidebar-btn[data-section]').forEach(btn => {
     else if (s === 'tasks') loadTasks();
     else if (s === 'schedules') loadSchedules();
     else if (s === 'config') loadConfig();
+    else if (s === 'siri') loadSiri();
   });
 });
 
@@ -416,6 +417,28 @@ async function saveConfigGroup(btn) {
     const res = await api('/config', { method: 'PUT', body: JSON.stringify({ updates }) });
     if (res.saved) { btn.textContent = '✓ Gespeichert'; setTimeout(() => { btn.textContent = 'Speichern'; }, 1500); }
   } catch (e) { console.error('Save config error:', e); }
+}
+
+// Siri
+async function loadSiri() {
+  try {
+    const data = await api('/siri-info');
+    document.getElementById('siri-token').textContent = data.api_token || '(kein Token konfiguriert)';
+    document.getElementById('siri-url').textContent = data.server_url || 'http://localhost:8800';
+    document.getElementById('siri-telegram-url').textContent = data.telegram_api_url || '';
+    const body = { chat_id: data.telegram_chat_id, text: '[Diktierter Text]' };
+    document.getElementById('siri-telegram-body').textContent = JSON.stringify(body, null, 2);
+    const apiExample = `URL: ${data.server_url}/api/admin/tasks/submit\nMethode: POST\nHeader:\n  Content-Type: application/json\n  Authorization: Bearer ${data.api_token || 'DEIN_TOKEN'}\nBody:\n  {"text": "[Diktierter Text]"}`;
+    document.getElementById('siri-api-example').textContent = apiExample;
+  } catch (e) { console.error('Siri load error:', e); }
+}
+
+function copySiriToken() {
+  const token = document.getElementById('siri-token').textContent;
+  navigator.clipboard.writeText(token).then(() => {
+    const btn = event.target;
+    if (btn) { const orig = btn.textContent; btn.textContent = '✓ Kopiert'; setTimeout(() => { btn.textContent = orig; }, 1500); }
+  });
 }
 
 // Modals

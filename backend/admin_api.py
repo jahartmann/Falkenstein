@@ -408,6 +408,29 @@ async def get_agent_log(agent_id: str, limit: int = 50):
     }
 
 
+# ── Siri / iOS Shortcuts ─────────────────────────────────────────────
+
+@router.get("/siri-info")
+async def get_siri_info():
+    from backend.config import API_TOKEN, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, PORT
+    import socket
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        local_ip = s.getsockname()[0]
+        s.close()
+    except Exception:
+        local_ip = "localhost"
+    return {
+        "api_token": API_TOKEN,
+        "server_url": f"http://{local_ip}:{PORT}",
+        "telegram_bot_token": TELEGRAM_TOKEN,
+        "telegram_chat_id": TELEGRAM_CHAT_ID,
+        "telegram_api_url": f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+        "port": PORT,
+    }
+
+
 # ── Memory ───────────────────────────────────────────────────────────
 
 @router.get("/memory")

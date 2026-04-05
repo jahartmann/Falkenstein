@@ -33,6 +33,12 @@
             <rect x="2" y="4" width="16" height="13" rx="1.5"/><path d="M6 4V2h8v2"/><circle cx="10" cy="10" r="2"/>
           </svg>
         </button>
+        <button class="sidebar-btn" data-section="siri" title="Siri & Shortcuts">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+            <circle cx="10" cy="10" r="7"/><path d="M10 6v4l3 3"/>
+            <path d="M6 3.5L5 2M14 3.5L15 2M3.5 6L2 5M16.5 6L18 5"/>
+          </svg>
+        </button>
       </div>
       <div class="sidebar-bottom">
         <button class="sidebar-btn" data-section="config" title="Config">
@@ -136,6 +142,74 @@
       <section class="section" id="section-config">
         <div class="section-header"><h1>Konfiguration</h1></div>
         <div id="config-container"></div>
+      </section>
+
+      <!-- Siri Section -->
+      <section class="section" id="section-siri">
+        <div class="section-header"><h1>Siri &amp; iOS Shortcuts</h1></div>
+        <div class="panel" style="margin-bottom:16px">
+          <h2>Verbindungsdaten</h2>
+          <div class="config-row" style="margin-bottom:12px">
+            <label>API Token</label>
+            <div style="display:flex;gap:8px;align-items:center">
+              <code class="token-display" id="siri-token" style="background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);padding:6px 10px;font-size:13px;flex:1">Laden...</code>
+              <button class="btn btn-sm" onclick="copySiriToken()">Kopieren</button>
+            </div>
+          </div>
+          <div class="config-row">
+            <label>Server URL</label>
+            <code id="siri-url" style="background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);padding:6px 10px;font-size:13px;display:block">Laden...</code>
+          </div>
+        </div>
+        <div class="panel" style="margin-bottom:16px">
+          <h2>Schritt-für-Schritt Anleitung</h2>
+          <div class="siri-steps">
+            <div class="siri-step">
+              <div class="step-number">1</div>
+              <div class="step-content">
+                <strong>Shortcuts-App öffnen</strong>
+                <p>Tippe auf + um einen neuen Shortcut zu erstellen.</p>
+              </div>
+            </div>
+            <div class="siri-step">
+              <div class="step-number">2</div>
+              <div class="step-content">
+                <strong>Diktieren-Aktion hinzufügen</strong>
+                <p>Aktion "Diktieren" hinzufügen (Spracheingabe) — Alternative: "Nach Eingabe fragen"</p>
+              </div>
+            </div>
+            <div class="siri-step">
+              <div class="step-number">3</div>
+              <div class="step-content">
+                <strong>URL abrufen (Telegram)</strong>
+                <p>Aktion "URL abrufen" → POST an Telegram Bot API sendMessage:</p>
+                <p style="margin-top:6px"><strong>URL:</strong></p>
+                <pre id="siri-telegram-url">Laden...</pre>
+                <p><strong>Body (JSON):</strong></p>
+                <pre id="siri-telegram-body">Laden...</pre>
+              </div>
+            </div>
+            <div class="siri-step">
+              <div class="step-number">4</div>
+              <div class="step-content">
+                <strong>Shortcut benennen</strong>
+                <p>Shortcut "Falkenstein" benennen → dann einfach "Hey Siri, Falkenstein" sagen.</p>
+              </div>
+            </div>
+            <div class="siri-step">
+              <div class="step-number">5</div>
+              <div class="step-content">
+                <strong>Optional: Widget / Home Screen</strong>
+                <p>Shortcut als Widget auf dem Home Screen platzieren für schnellen Zugriff.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="panel">
+          <h2>Alternative: Direkte API</h2>
+          <p style="font-size:13px;color:var(--text-secondary);margin-bottom:12px">Statt Telegram kann auch direkt die Admin-API angesteuert werden:</p>
+          <pre id="siri-api-example">Laden...</pre>
+        </div>
       </section>
     </main>
   </div>
