@@ -123,7 +123,7 @@ async def lifespan(app: FastAPI):
     # 4. LLM + Router (config from ConfigService)
     llm_config = config_service.get_category("llm")
     llm = LLMClient(config=llm_config)
-    llm_router = LLMRouter(local_llm=llm)
+    llm_router = LLMRouter(local_llm=llm, config_service=config_service)
 
     # 5. Tools (use config_service for paths)
     vault_path = config_service.get_path("obsidian_vault_path")

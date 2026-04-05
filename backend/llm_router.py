@@ -22,12 +22,19 @@ DEFAULT_ROUTING = {
 class LLMRouter:
     """Routes LLM calls to the right backend based on task type."""
 
-    def __init__(self, local_llm: LLMClient):
+    def __init__(self, local_llm: LLMClient, config_service=None):
         self.local = local_llm
         self._claude = CLILLMClient(provider="claude")
         self._gemini = CLILLMClient(provider="gemini")
-        # Routing config — can be changed at runtime
+        self._config_service = config_service
+        # Routing config — load from config or use defaults
         self.routing: dict[str, str] = dict(DEFAULT_ROUTING)
+        if config_service:
+            for task_type in DEFAULT_ROUTING:
+                key = f"llm_provider_{task_type}"
+                saved = config_service.get(key)
+                if saved and saved in PROVIDERS:
+                    self.routing[task_type] = saved
 
     def get_client(self, task_type: str = "classify"):
         """Get the LLM client for a given task type."""
@@ -38,10 +45,12 @@ class LLMRouter:
             return self._gemini
         return self.local
 
-    def set_routing(self, task_type: str, provider: str):
-        """Update routing for a task type."""
+    async def set_routing(self, task_type: str, provider: str):
+        """Update routing for a task type and persist."""
         if task_type in self.routing and provider in PROVIDERS:
             self.routing[task_type] = provider
+            if self._config_service:
+                await self._config_service.set(f"llm_provider_{task_type}", provider)
 
     def get_routing(self) -> dict[str, str]:
         """Get current routing config."""

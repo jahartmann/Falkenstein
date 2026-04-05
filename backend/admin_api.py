@@ -306,6 +306,19 @@ async def put_config(data: ConfigBatchUpdate):
     return {"saved": True, "count": len(data.updates)}
 
 
+@router.post("/restart")
+async def restart_server():
+    """Restart the server process."""
+    import sys
+    import signal
+
+    async def _do_restart():
+        await asyncio.sleep(0.5)
+        os.kill(os.getpid(), signal.SIGTERM)
+    asyncio.create_task(_do_restart())
+    return {"restarting": True}
+
+
 # ── Tasks ────────────────────────────────────────────────────────────
 
 @router.get("/tasks")
@@ -568,7 +581,7 @@ async def put_llm_routing(update: LLMRoutingUpdate):
     for task_type, provider in update.routing.items():
         if provider not in PROVIDERS:
             return {"error": f"Unbekannter Provider: {provider}. Erlaubt: {PROVIDERS}"}
-        _llm_router.set_routing(task_type, provider)
+        await _llm_router.set_routing(task_type, provider)
     return {"saved": True, "routing": _llm_router.get_routing()}
 
 

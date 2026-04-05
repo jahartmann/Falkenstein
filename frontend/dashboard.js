@@ -374,6 +374,7 @@ async function aiCreateSchedule() {
 
 // Config
 const CONFIG_CATEGORIES = {
+  'Server': ['api_token','telegram_bot_token','telegram_chat_id','telegram_allowed_chat_ids','port'],
   'LLM': ['ollama_host','ollama_model','ollama_model_light','ollama_model_heavy','ollama_num_ctx','ollama_num_ctx_extended','llm_max_retries','llm_provider_classify','llm_provider_action','llm_provider_content','llm_provider_scheduled','cli_provider','cli_daily_token_budget'],
   'Pfade': ['obsidian_vault_path','workspace_path'],
   'Persönlichkeit': ['soul_prompt'],
@@ -381,7 +382,7 @@ const CONFIG_CATEGORIES = {
   'Allgemein': ['obsidian_enabled','obsidian_auto_knowledge'],
 };
 const TEXTAREA_KEYS = new Set(['soul_prompt']);
-const PASSWORD_KEYS = new Set(['brave_api_key']);
+const PASSWORD_KEYS = new Set(['brave_api_key', 'api_token', 'telegram_bot_token']);
 const PATH_KEYS = new Set(['obsidian_vault_path', 'workspace_path']);
 
 async function loadConfig() {
@@ -421,6 +422,29 @@ async function loadConfig() {
     }
     container.innerHTML = html || '<p class="text-muted">Keine Konfiguration</p>';
   } catch (e) { console.error('Config load error:', e); }
+}
+
+async function restartServer() {
+  if (!confirm('Server wirklich neustarten? Alle laufenden Agents werden gestoppt.')) return;
+  try {
+    await api('/restart', { method: 'POST' });
+    document.getElementById('ws-dot').classList.remove('connected');
+    // Show countdown and reconnect
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:999;display:flex;align-items:center;justify-content:center;color:#fff;font-size:18px;font-family:monospace';
+    overlay.innerHTML = '<div style="text-align:center"><div>Server startet neu...</div><div id="restart-countdown" style="margin-top:12px;font-size:14px;color:var(--text-muted)">Verbinde in 5s...</div></div>';
+    document.body.appendChild(overlay);
+    let seconds = 5;
+    const iv = setInterval(() => {
+      seconds--;
+      const el = document.getElementById('restart-countdown');
+      if (el) el.textContent = `Verbinde in ${seconds}s...`;
+      if (seconds <= 0) {
+        clearInterval(iv);
+        location.reload();
+      }
+    }, 1000);
+  } catch (e) { console.error('Restart error:', e); }
 }
 
 async function saveConfigGroup(btn) {
