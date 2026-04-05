@@ -59,7 +59,7 @@ _git_watch() {
         if [ "$OLD_HEAD" != "$NEW_HEAD" ]; then
             echo -e "\n${GREEN}[Git] Neue Änderungen gezogen. Server wird neugestartet...${NC}"
             pip install -q -r requirements.txt 2>/dev/null
-            kill $SERVER_PID 2>/dev/null
+            kill -9 $SERVER_PID 2>/dev/null
         fi
     done
 }

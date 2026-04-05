@@ -308,13 +308,10 @@ async def put_config(data: ConfigBatchUpdate):
 
 @router.post("/restart")
 async def restart_server():
-    """Restart the server process."""
-    import sys
-    import signal
-
+    """Restart the server process — exits with code 42 so start.sh restarts."""
     async def _do_restart():
         await asyncio.sleep(0.5)
-        os.kill(os.getpid(), signal.SIGTERM)
+        os._exit(42)
     asyncio.create_task(_do_restart())
     return {"restarting": True}
 
