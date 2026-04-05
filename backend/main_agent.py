@@ -75,7 +75,8 @@ class MainAgent:
                  scheduler: SmartScheduler | Scheduler | None = None,
                  llm_router: LLMRouter | None = None,
                  config_service=None,
-                 fact_memory: FactMemory | None = None):  # legacy
+                 fact_memory: FactMemory | None = None,  # legacy
+                 allowlist=None):
         self.llm = llm
         self.llm_router = llm_router
         self.tools = tools
@@ -89,6 +90,7 @@ class MainAgent:
         self.fact_memory = fact_memory  # legacy
         self.scheduler = scheduler
         self.config_service = config_service
+        self.allowlist = allowlist
         self.active_agents: dict[str, dict] = {}
         self._pending_tasks: dict[int, asyncio.Task] = {}
         self._agent_pool = load_agent_pool()
@@ -192,6 +194,9 @@ class MainAgent:
         "/schedule": "Schedules verwalten (list/create/edit/toggle/delete/run)",
         "/cancel": "Agent abbrechen — /cancel <agent_id>",
         "/task": "Task-Details anzeigen — /task <ID>",
+        "/allow": "Chat-ID zur Allowlist hinzufügen (nur Owner) — /allow <chat_id>",
+        "/revoke": "Chat-ID aus Allowlist entfernen (nur Owner) — /revoke <chat_id>",
+        "/allowed": "Alle erlaubten Chat-IDs anzeigen",
         "/help": "Alle Befehle anzeigen",
     }
 
@@ -549,6 +554,46 @@ class MainAgent:
                 pass
         return f"Agent `{agent_id}` abgebrochen."
 
+    # ── Allowlist /commands ──────────────────────────────────────────────────
+
+    async def _cmd_allow(self, args: str, chat_id: str) -> str:
+        """Add a chat_id to the allowlist. Owner-only."""
+        if not self.allowlist:
+            return "Allowlist nicht aktiv."
+        if not self.allowlist.is_owner(chat_id):
+            return "Nur der Owner kann Chat-IDs hinzufügen."
+        target = args.strip()
+        if not target:
+            return "Nutzung: /allow <chat_id>"
+        self.allowlist.add(target)
+        return f"Chat-ID `{target}` zur Allowlist hinzugefügt."
+
+    async def _cmd_revoke(self, args: str, chat_id: str) -> str:
+        """Remove a chat_id from the allowlist. Owner-only."""
+        if not self.allowlist:
+            return "Allowlist nicht aktiv."
+        if not self.allowlist.is_owner(chat_id):
+            return "Nur der Owner kann Chat-IDs entfernen."
+        target = args.strip()
+        if not target:
+            return "Nutzung: /revoke <chat_id>"
+        try:
+            self.allowlist.remove(target)
+        except ValueError as exc:
+            return str(exc)
+        return f"Chat-ID `{target}` aus der Allowlist entfernt."
+
+    async def _cmd_allowed(self, chat_id: str) -> str:
+        """Show all allowed chat IDs."""
+        if not self.allowlist:
+            return "Allowlist nicht aktiv."
+        ids = self.allowlist.list_allowed()
+        lines = ["*Erlaubte Chat-IDs:*"]
+        for cid in ids:
+            suffix = " (Owner)" if self.allowlist.is_owner(cid) else ""
+            lines.append(f"• `{cid}`{suffix}")
+        return "\n".join(lines)
+
     async def _handle_command(self, text: str, chat_id: str) -> str | None:
         """Parse and execute a /command. Returns response text, or None if not a command."""
         if not text.startswith("/"):
@@ -566,6 +611,9 @@ class MainAgent:
             "/schedule": lambda: self._cmd_schedule(args, chat_id),
             "/cancel": lambda: self._cmd_cancel(args, chat_id),
             "/task": lambda: self._cmd_task(args, chat_id),
+            "/allow": lambda: self._cmd_allow(args, chat_id),
+            "/revoke": lambda: self._cmd_revoke(args, chat_id),
+            "/allowed": lambda: self._cmd_allowed(chat_id),
         }
         handler = handlers.get(cmd)
         if handler:

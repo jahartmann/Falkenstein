@@ -6,7 +6,8 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from backend.config import DB_PATH, PORT, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID
+from backend.config import DB_PATH, PORT, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_ALLOWED_CHAT_IDS
+from backend.security.telegram_allowlist import TelegramAllowlist
 from backend.config_service import ConfigService
 from backend.admin_api import router as admin_router
 from backend import admin_api
@@ -124,8 +125,12 @@ async def lifespan(app: FastAPI):
     # 6. Obsidian Writer
     obsidian_writer = ObsidianWriter(vault_path=vault_path)
 
-    # 7. Telegram
-    telegram = TelegramBot(token=TELEGRAM_TOKEN, chat_id=TELEGRAM_CHAT_ID)
+    # 7. Telegram + Allowlist
+    allowlist = TelegramAllowlist(
+        owner_chat_id=TELEGRAM_CHAT_ID,
+        allowed_ids_csv=TELEGRAM_ALLOWED_CHAT_IDS,
+    )
+    telegram = TelegramBot(token=TELEGRAM_TOKEN, chat_id=TELEGRAM_CHAT_ID, allowlist=allowlist)
 
     # 8. Scheduler (DB-backed, smart)
     scheduler = SmartScheduler(db)
@@ -148,6 +153,7 @@ async def lifespan(app: FastAPI):
         scheduler=scheduler,
         llm_router=llm_router,
         config_service=config_service,
+        allowlist=allowlist,
     )
 
     # 11. Wire admin API

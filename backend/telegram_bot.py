@@ -3,13 +3,19 @@ from __future__ import annotations
 import asyncio
 import httpx
 
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from backend.security.telegram_allowlist import TelegramAllowlist
+
 
 class TelegramBot:
     """Telegram Bot — thin transport layer. All logic is in MainAgent."""
 
-    def __init__(self, token: str = "", chat_id: str = ""):
+    def __init__(self, token: str = "", chat_id: str = "",
+                 allowlist: "TelegramAllowlist | None" = None):
         self.token = token
         self.chat_id = chat_id
+        self.allowlist = allowlist
         self.base_url = f"https://api.telegram.org/bot{self.token}"
         self._offset: int = 0
         self._handlers: list = []
@@ -105,9 +111,13 @@ class TelegramBot:
                     msg = update.get("message", {})
                     text = msg.get("text", "")
                     if text:
+                        msg_chat_id = str(msg["chat"]["id"])
+                        # Silently ignore messages from non-allowed chat IDs
+                        if self.allowlist and not self.allowlist.is_allowed(msg_chat_id):
+                            continue
                         messages.append({
                             "text": text,
-                            "chat_id": str(msg["chat"]["id"]),
+                            "chat_id": msg_chat_id,
                             "from": msg.get("from", {}).get("first_name", "Unknown"),
                         })
                     # Handle callback queries (inline button presses)
@@ -115,6 +125,19 @@ class TelegramBot:
                     if callback:
                         cb_data = callback.get("data", "")
                         cb_chat = str(callback.get("message", {}).get("chat", {}).get("id", ""))
+                        # Silently ignore callbacks from non-allowed chat IDs
+                        if self.allowlist and not self.allowlist.is_allowed(cb_chat):
+                            # Still answer the callback to remove the loading spinner
+                            cb_id = callback.get("id")
+                            if cb_id:
+                                try:
+                                    await client.post(
+                                        f"{self.base_url}/answerCallbackQuery",
+                                        json={"callback_query_id": cb_id},
+                                    )
+                                except Exception:
+                                    pass
+                            continue
                         if cb_data:
                             messages.append({
                                 "text": cb_data,
