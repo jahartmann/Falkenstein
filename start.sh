@@ -1,6 +1,4 @@
 #!/bin/bash
-set -e
-
 cd "$(dirname "$0")"
 
 # Colors
@@ -86,7 +84,7 @@ while true; do
         WATCHER_PID=$!
     fi
 
-    wait $SERVER_PID
+    wait $SERVER_PID || true
     EXIT_CODE=$?
 
     echo -e "\n${YELLOW}Server beendet (Exit $EXIT_CODE). Neustart in 2s...${NC}"
