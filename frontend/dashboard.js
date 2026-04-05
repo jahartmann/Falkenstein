@@ -748,7 +748,9 @@ async function loadReminders() {
     if (reminders.length === 0) { el.innerHTML = '<span class="text-muted">Keine Erinnerungen</span>'; return; }
 
     el.innerHTML = reminders.map(r => {
-      const due = new Date(r.due_at);
+      // due_at is local time string from DB, compare as strings
+      const dueStr = r.due_at || '';
+      const due = new Date(dueStr.replace(' ', 'T'));
       const now = new Date();
       const isPast = due < now;
       const statusColor = r.delivered ? 'var(--green)' : isPast ? 'var(--red)' : 'var(--amber)';
@@ -768,7 +770,8 @@ async function addReminder() {
   const text = document.getElementById('reminder-new-text').value.trim();
   const dueInput = document.getElementById('reminder-new-due').value;
   if (!text || !dueInput) { alert('Text und Datum sind Pflicht'); return; }
-  const due_at = new Date(dueInput).toISOString();
+  // Send local time as-is (backend uses local datetime.now() for comparison)
+  const due_at = dueInput.replace('T', ' ') + ':00';
   try {
     await api('/reminders', { method: 'POST', body: JSON.stringify({ text, due_at }) });
     document.getElementById('reminder-new-text').value = '';
