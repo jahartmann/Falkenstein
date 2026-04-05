@@ -204,7 +204,8 @@ export class ObjectManager {
   _openMonitor(agent) {
     const html = `
       <div style="margin-bottom:12px">
-        <span style="color:#888">Typ:</span> <span style="color:#e0e0ff">${agent.type}</span>
+        <span style="color:#888">Name:</span> <span style="color:#e0e0ff">${agent.name}</span>
+        <span style="color:#888;margin-left:16px">Rolle:</span> <span style="color:#e0e0ff">${agent.role || agent.agentType || '—'}</span>
         <span style="color:#888;margin-left:16px">Status:</span> <span style="color:#44ff88">${agent.state}</span>
       </div>
       <div style="margin-bottom:12px">
@@ -213,7 +214,7 @@ export class ObjectManager {
       </div>
       <div style="color:#888;font-size:11px">Agent ID: ${agent.id}</div>
     `;
-    this.pm.open(`Monitor — ${agent.type}`, html);
+    this.pm.open(`Monitor — ${agent.name}`, html);
   }
 
   _findEntrance() {

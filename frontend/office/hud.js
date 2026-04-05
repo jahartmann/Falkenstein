@@ -90,10 +90,15 @@ export class HUD {
 
     ctx.putImageData(this._minimapBase, 0, 0);
 
-    const colors = { coder: '#44aaff', researcher: '#ffaa44', writer: '#aa44ff', ops: '#44ff88' };
+    const realColors = { coder: '#44aaff', researcher: '#ffaa44', writer: '#aa44ff', ops: '#44ff88' };
     for (const agent of this.am.agents.values()) {
-      ctx.fillStyle = colors[agent.type] || '#ffffff';
-      ctx.fillRect(agent.tileX * sx - 1, agent.tileY * sy - 1, 3, 3);
+      if (agent.isNPC) {
+        ctx.fillStyle = '#888888';
+        ctx.fillRect(agent.tileX * sx - 1, agent.tileY * sy - 1, 2, 2);
+      } else {
+        ctx.fillStyle = realColors[agent.agentType] || '#44ff88';
+        ctx.fillRect(agent.tileX * sx - 1, agent.tileY * sy - 1, 3, 3);
+      }
     }
 
     const pt = this.tm.worldToTile(playerX, playerY);

@@ -84,7 +84,7 @@ export class OfficeWS {
     }
     const activeIds = new Set(agents.map(a => a.agent_id || a.id));
     for (const id of this.am.agents.keys()) {
-      if (id === 'main-agent') continue;
+      if (id.startsWith('npc-')) continue;
       if (!activeIds.has(id)) {
         this.am.removeAgent(id);
       }

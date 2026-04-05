@@ -14,9 +14,10 @@ export class PlayerEntity {
   create(startTileX, startTileY) {
     const pos = this.tm.tileToWorld(startTileX, startTileY);
 
-    this.sprite = this.scene.physics.add.sprite(pos.x, pos.y, 'char_1', 0);
+    this.sprite = this.scene.physics.add.sprite(pos.x, pos.y, 'char_0', 0);
     this.sprite.setScale(3);
     this.sprite.setDepth(10);
+    this.sprite.setOrigin(0.5, 0.75);
     this.sprite.body.setSize(12, 12);
     this.sprite.body.setOffset(2, 4);
     this.sprite.setCollideWorldBounds(true);
@@ -56,7 +57,7 @@ export class PlayerEntity {
       if (!anims.exists(`player_walk_${dir.name}`)) {
         anims.create({
           key: `player_walk_${dir.name}`,
-          frames: anims.generateFrameNumbers('char_1', { start: start, end: start + 2 }),
+          frames: anims.generateFrameNumbers('char_0', { start: start, end: start + 2 }),
           frameRate: 8,
           repeat: -1
         });
@@ -64,7 +65,7 @@ export class PlayerEntity {
       if (!anims.exists(`player_idle_${dir.name}`)) {
         anims.create({
           key: `player_idle_${dir.name}`,
-          frames: [{ key: 'char_1', frame: start + 1 }],
+          frames: [{ key: 'char_0', frame: start + 1 }],
           frameRate: 1,
           repeat: 0
         });

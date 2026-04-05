@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import glob as globmod
+import os
 import time
 
 from fastapi import APIRouter
@@ -469,3 +471,224 @@ async def put_llm_routing(update: LLMRoutingUpdate):
             return {"error": f"Unbekannter Provider: {provider}. Erlaubt: {PROVIDERS}"}
         _llm_router.set_routing(task_type, provider)
     return {"saved": True, "routing": _llm_router.get_routing()}
+
+
+# ── Tool Log (global) ────────────────────────────────────────────────
+
+@router.get("/tool-log")
+async def get_tool_log(agent_id: str | None = None, tool: str | None = None,
+                       success: int | None = None, limit: int = 100, offset: int = 0):
+    """Global tool execution log with filters."""
+    if not _db or not _db._conn:
+        return {"logs": [], "total": 0}
+    where = []
+    params = []
+    if agent_id:
+        where.append("agent_id = ?")
+        params.append(agent_id)
+    if tool:
+        where.append("tool_name LIKE ?")
+        params.append(f"%{tool}%")
+    if success is not None:
+        where.append("success = ?")
+        params.append(success)
+    where_str = ("WHERE " + " AND ".join(where)) if where else ""
+
+    count_sql = f"SELECT COUNT(*) FROM tool_log {where_str}"
+    cursor = await _db._conn.execute(count_sql, params)
+    row = await cursor.fetchone()
+    total = row[0] if row else 0
+
+    sql = f"SELECT id, agent_id, tool_name, input, output, success, created_at FROM tool_log {where_str} ORDER BY created_at DESC LIMIT ? OFFSET ?"
+    cursor = await _db._conn.execute(sql, params + [limit, offset])
+    rows = await cursor.fetchall()
+    return {
+        "logs": [
+            {"id": r["id"], "agent_id": r["agent_id"], "tool": r["tool_name"],
+             "input": (r["input"] or "")[:300], "output": (r["output"] or "")[:500],
+             "success": bool(r["success"]), "time": r["created_at"]}
+            for r in rows
+        ],
+        "total": total,
+    }
+
+
+# ── System Health ────────────────────────────────────────────────────
+
+@router.get("/health")
+async def get_health():
+    """System health: Ollama status, uptime, DB stats, WS connections."""
+    import httpx
+
+    ollama_host = _config_service.get("ollama_host", "http://localhost:11434") if _config_service else "http://localhost:11434"
+    ollama_info = {"status": "offline", "models": []}
+    try:
+        async with httpx.AsyncClient(timeout=3) as client:
+            resp = await client.get(f"{ollama_host}/api/tags")
+            if resp.status_code == 200:
+                data = resp.json()
+                ollama_info["status"] = "online"
+                ollama_info["models"] = [
+                    {"name": m["name"], "size": m.get("size", 0),
+                     "modified": m.get("modified_at", "")}
+                    for m in data.get("models", [])
+                ]
+    except Exception:
+        pass
+
+    db_stats = {}
+    if _db and _db._conn:
+        for table in ["tasks", "tool_log", "messages", "memories", "schedules"]:
+            try:
+                cursor = await _db._conn.execute(f"SELECT COUNT(*) FROM {table}")
+                row = await cursor.fetchone()
+                db_stats[table] = row[0] if row else 0
+            except Exception:
+                db_stats[table] = -1
+
+    budget = {}
+    if _budget_tracker:
+        budget = {"used": _budget_tracker.used, "budget": _budget_tracker.daily_budget, "remaining": _budget_tracker.remaining}
+
+    return {
+        "uptime_seconds": int(time.time() - _start_time) if _start_time else 0,
+        "ollama": ollama_info,
+        "db_stats": db_stats,
+        "budget": budget,
+    }
+
+
+# ── Obsidian Preview ─────────────────────────────────────────────────
+
+@router.get("/obsidian/recent")
+async def get_obsidian_recent(limit: int = 20):
+    """Get recently modified Obsidian notes."""
+    vault = _config_service.get_path("obsidian_vault_path") if _config_service else None
+    if not vault or not vault.exists():
+        return {"notes": [], "vault_path": str(vault or "")}
+
+    md_files = []
+    for f in vault.rglob("*.md"):
+        if ".obsidian" in str(f) or ".trash" in str(f):
+            continue
+        try:
+            stat = f.stat()
+            rel = str(f.relative_to(vault))
+            md_files.append({"path": rel, "modified": stat.st_mtime, "size": stat.st_size})
+        except Exception:
+            continue
+
+    md_files.sort(key=lambda x: x["modified"], reverse=True)
+    return {"notes": md_files[:limit], "vault_path": str(vault)}
+
+
+@router.get("/obsidian/note")
+async def get_obsidian_note(path: str):
+    """Read a single Obsidian note content."""
+    vault = _config_service.get_path("obsidian_vault_path") if _config_service else None
+    if not vault:
+        return {"error": "Vault not configured"}
+
+    full_path = (vault / path).resolve()
+    # Security: ensure path is within vault
+    if not str(full_path).startswith(str(vault.resolve())):
+        return {"error": "Access denied"}
+    if not full_path.exists() or not full_path.is_file():
+        return {"error": "Note not found"}
+
+    try:
+        content = full_path.read_text(encoding="utf-8")
+        return {"path": path, "content": content}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+# ── Memory (delete) ──────────────────────────────────────────────────
+
+@router.delete("/memory/{memory_id}")
+async def delete_memory(memory_id: int):
+    """Delete a memory fact."""
+    if not _db or not _db._conn:
+        return {"error": "DB not initialized"}
+    await _db._conn.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
+    await _db._conn.commit()
+    return {"deleted": True}
+
+
+# ── File Browser ─────────────────────────────────────────────────────
+
+@router.get("/files")
+async def list_files(path: str = ""):
+    """List files and directories in workspace."""
+    workspace = _config_service.get_path("workspace_path") if _config_service else None
+    if not workspace:
+        return {"error": "Workspace not configured", "items": []}
+
+    workspace = workspace.resolve()
+    target = (workspace / path).resolve()
+
+    if not str(target).startswith(str(workspace)):
+        return {"error": "Access denied"}
+    if not target.exists():
+        return {"error": "Path not found", "items": []}
+
+    items = []
+    if target.is_dir():
+        for entry in sorted(target.iterdir(), key=lambda e: (not e.is_dir(), e.name.lower())):
+            if entry.name.startswith("."):
+                continue
+            try:
+                stat = entry.stat()
+                items.append({
+                    "name": entry.name,
+                    "path": str(entry.relative_to(workspace)),
+                    "is_dir": entry.is_dir(),
+                    "size": stat.st_size if entry.is_file() else 0,
+                    "modified": stat.st_mtime,
+                })
+            except Exception:
+                continue
+
+    return {"items": items, "current": path, "workspace": str(workspace)}
+
+
+@router.get("/files/read")
+async def read_file(path: str):
+    """Read file content from workspace."""
+    workspace = _config_service.get_path("workspace_path") if _config_service else None
+    if not workspace:
+        return {"error": "Workspace not configured"}
+
+    workspace = workspace.resolve()
+    full = (workspace / path).resolve()
+
+    if not str(full).startswith(str(workspace)):
+        return {"error": "Access denied"}
+    if not full.exists() or not full.is_file():
+        return {"error": "File not found"}
+
+    try:
+        content = full.read_text(encoding="utf-8", errors="replace")
+        return {"path": path, "content": content, "size": full.stat().st_size}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+# ── Chat History ─────────────────────────────────────────────────────
+
+@router.get("/chat-history")
+async def get_chat_history(limit: int = 50):
+    """Get recent chat messages."""
+    if not _db or not _db._conn:
+        return {"messages": []}
+    cursor = await _db._conn.execute(
+        "SELECT id, role, content, created_at FROM chat_history ORDER BY created_at DESC LIMIT ?",
+        (limit,)
+    )
+    rows = await cursor.fetchall()
+    return {
+        "messages": [
+            {"id": r["id"], "role": r["role"], "content": r["content"], "time": r["created_at"]}
+            for r in reversed(list(rows))
+        ]
+    }

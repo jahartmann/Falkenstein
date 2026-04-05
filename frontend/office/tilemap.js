@@ -137,8 +137,10 @@ export class OfficeScene extends Phaser.Scene {
     this.tilemap.create();
 
     const bounds = this.tilemap.getWorldBounds();
-    this.physics.world.setBounds(0, 0, bounds.width, bounds.height);
-    this.cameras.main.setBounds(0, 0, bounds.width, bounds.height);
+    // Extra padding so sprites at world edges are fully visible
+    const pad = 48;
+    this.physics.world.setBounds(-pad, -pad, bounds.width + pad * 2, bounds.height + pad * 2);
+    this.cameras.main.setBounds(-pad, -pad, bounds.width + pad * 2, bounds.height + pad * 2);
     this.cameras.main.setZoom(1);
 
     // Player
@@ -152,10 +154,10 @@ export class OfficeScene extends Phaser.Scene {
     this.cameraManager = new CameraManager(this, this.player);
     this.cameraManager.create();
 
-    // Agent manager
+    // Agent manager + NPC employees
     this.agentManager = new AgentManager(this, this.tilemap);
     this.agentManager.create();
-    this.agentManager.spawnAgent('main-agent', 'ops', 'MainAgent — Koordination');
+    this.agentManager.spawnNPCs();
 
     // Speech bubbles
     this.bubbleManager = new BubbleManager(this, this.agentManager);
@@ -188,6 +190,7 @@ export class OfficeScene extends Phaser.Scene {
         else if (this.objectManager) this.objectManager.interact();
       }
     }
+    if (this.agentManager) this.agentManager.updatePositions();
     if (this.bubbleManager) this.bubbleManager.update();
     if (this.hud && this.player) {
       const pos = this.player.getWorldPos();

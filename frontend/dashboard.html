@@ -28,9 +28,39 @@
             <circle cx="10" cy="10" r="7"/><path d="M10 6v4l2.5 2.5"/>
           </svg>
         </button>
-        <button class="sidebar-btn" title="Büro" onclick="window.open('/office','_blank')">
+        <button class="sidebar-btn" data-section="chat" title="Chat">
           <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
-            <rect x="2" y="4" width="16" height="13" rx="1.5"/><path d="M6 4V2h8v2"/><circle cx="10" cy="10" r="2"/>
+            <path d="M4 4h12a2 2 0 012 2v6a2 2 0 01-2 2H8l-4 3v-3a2 2 0 01-2-2V6a2 2 0 012-2z"/>
+          </svg>
+        </button>
+        <button class="sidebar-btn" data-section="timeline" title="Timeline">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M10 2v16M6 6h8M4 10h12M6 14h8"/>
+          </svg>
+        </button>
+        <button class="sidebar-btn" data-section="memory" title="Memory">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+            <circle cx="10" cy="10" r="7"/><circle cx="10" cy="10" r="3"/><path d="M10 3v4M10 13v4M3 10h4M13 10h4"/>
+          </svg>
+        </button>
+        <button class="sidebar-btn" data-section="toollog" title="Tool Log">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M4 4h12M4 8h12M4 12h8M4 16h5"/><circle cx="15" cy="14" r="3"/>
+          </svg>
+        </button>
+        <button class="sidebar-btn" data-section="obsidian" title="Obsidian">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M10 2L3 7v6l7 5 7-5V7z"/><path d="M10 2v16"/>
+          </svg>
+        </button>
+        <button class="sidebar-btn" data-section="health" title="System">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+            <rect x="2" y="6" width="16" height="10" rx="1.5"/><path d="M6 6V4a4 4 0 018 0v2"/><path d="M6 11h2l1-2 2 4 1-2h2"/>
+          </svg>
+        </button>
+        <button class="sidebar-btn" data-section="files" title="Dateien">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M3 4h5l2 2h7a1 1 0 011 1v9a1 1 0 01-1 1H3a1 1 0 01-1-1V5a1 1 0 011-1z"/>
           </svg>
         </button>
         <button class="sidebar-btn" data-section="siri" title="Siri & Shortcuts">
@@ -41,6 +71,11 @@
         </button>
       </div>
       <div class="sidebar-bottom">
+        <button class="sidebar-btn" title="Büro" onclick="window.open('/office','_blank')">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+            <rect x="2" y="4" width="16" height="13" rx="1.5"/><path d="M6 4V2h8v2"/><circle cx="10" cy="10" r="2"/>
+          </svg>
+        </button>
         <button class="sidebar-btn" data-section="config" title="Config">
           <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
             <circle cx="10" cy="10" r="3"/><path d="M10 2v2m0 12v2M2 10h2m12 0h2M4.22 4.22l1.42 1.42m8.72 8.72l1.42 1.42M4.22 15.78l1.42-1.42m8.72-8.72l1.42-1.42"/>
@@ -84,7 +119,10 @@
       <section class="section" id="section-tasks">
         <div class="section-header">
           <h1>Tasks</h1>
-          <button class="btn btn-primary" onclick="openModal('modal-task')">+ Neuer Task</button>
+          <div class="btn-group">
+            <button class="btn" id="tasks-view-toggle" onclick="toggleTaskView()">Kanban</button>
+            <button class="btn btn-primary" onclick="openModal('modal-task')">+ Neuer Task</button>
+          </div>
         </div>
         <div class="filter-bar">
           <select id="filter-status" onchange="loadTasks()">
@@ -102,6 +140,12 @@
             <option value="ops">Ops</option>
           </select>
           <input type="text" id="filter-search" placeholder="Suche..." oninput="debouncedLoadTasks()">
+        </div>
+        <div id="tasks-kanban" class="kanban-board" style="display:none">
+          <div class="kanban-column" data-status="open"><div class="kanban-header">Open</div><div class="kanban-cards" id="kanban-open"></div></div>
+          <div class="kanban-column" data-status="in_progress"><div class="kanban-header">In Progress</div><div class="kanban-cards" id="kanban-in_progress"></div></div>
+          <div class="kanban-column" data-status="done"><div class="kanban-header">Done</div><div class="kanban-cards" id="kanban-done"></div></div>
+          <div class="kanban-column" data-status="failed"><div class="kanban-header">Failed</div><div class="kanban-cards" id="kanban-failed"></div></div>
         </div>
         <div class="card">
           <table>
@@ -142,6 +186,110 @@
       <section class="section" id="section-config">
         <div class="section-header"><h1>Konfiguration</h1></div>
         <div id="config-container"></div>
+      </section>
+
+      <!-- Chat Section -->
+      <section class="section" id="section-chat">
+        <div class="section-header"><h1>Chat</h1></div>
+        <div class="chat-container">
+          <div class="chat-messages" id="chat-messages"></div>
+          <div class="chat-input-bar">
+            <textarea id="chat-input" rows="1" placeholder="Nachricht an Falki..." onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendChat()}"></textarea>
+            <button class="btn btn-primary" onclick="sendChat()">Senden</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Timeline Section -->
+      <section class="section" id="section-timeline">
+        <div class="section-header"><h1>Agent Timeline</h1></div>
+        <div id="timeline-container" class="timeline-container"></div>
+      </section>
+
+      <!-- Memory Section -->
+      <section class="section" id="section-memory">
+        <div class="section-header"><h1>Memory</h1></div>
+        <div class="filter-bar">
+          <input type="text" id="memory-search" placeholder="Memory durchsuchen..." oninput="filterMemory()">
+        </div>
+        <div id="memory-list" class="memory-list"></div>
+      </section>
+
+      <!-- Tool Log Section -->
+      <section class="section" id="section-toollog">
+        <div class="section-header"><h1>Tool Log</h1></div>
+        <div class="filter-bar">
+          <input type="text" id="toollog-filter-agent" placeholder="Agent ID..." oninput="debouncedLoadToolLog()">
+          <input type="text" id="toollog-filter-tool" placeholder="Tool Name..." oninput="debouncedLoadToolLog()">
+          <select id="toollog-filter-success" onchange="loadToolLog()">
+            <option value="">Alle</option><option value="1">Erfolg</option><option value="0">Fehler</option>
+          </select>
+        </div>
+        <div class="card">
+          <table>
+            <thead><tr>
+              <th style="width:60px">ID</th><th style="width:100px">Agent</th><th style="width:120px">Tool</th>
+              <th>Input</th><th>Output</th><th style="width:60px">OK</th><th style="width:120px">Zeit</th>
+            </tr></thead>
+            <tbody id="toollog-table"></tbody>
+          </table>
+          <div class="pagination" id="toollog-pagination"></div>
+        </div>
+      </section>
+
+      <!-- Obsidian Section -->
+      <section class="section" id="section-obsidian">
+        <div class="section-header"><h1>Obsidian</h1><button class="btn" onclick="loadObsidian()">Aktualisieren</button></div>
+        <div class="panels" style="grid-template-columns:300px 1fr">
+          <div class="panel" style="max-height:80vh;overflow-y:auto">
+            <h2>Letzte Notizen</h2>
+            <div id="obsidian-list" class="obsidian-list"></div>
+          </div>
+          <div class="panel" style="max-height:80vh;overflow-y:auto">
+            <h2 id="obsidian-note-title">Notiz auswählen</h2>
+            <div id="obsidian-note-content" class="obsidian-content"><span class="text-muted">Klicke links auf eine Notiz</span></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Health Section -->
+      <section class="section" id="section-health">
+        <div class="section-header"><h1>System Health</h1><button class="btn" onclick="loadHealth()">Aktualisieren</button></div>
+        <div class="stats-row" id="health-stats"></div>
+        <div class="panels">
+          <div class="panel">
+            <h2>Ollama</h2>
+            <div id="health-ollama"></div>
+          </div>
+          <div class="panel">
+            <h2>Datenbank</h2>
+            <div id="health-db"></div>
+          </div>
+        </div>
+        <div class="panel" style="margin-top:16px">
+          <h2>LLM Routing</h2>
+          <div id="health-routing"></div>
+        </div>
+        <div class="panel" style="margin-top:16px">
+          <h2>Token Budget</h2>
+          <div id="health-budget"></div>
+        </div>
+      </section>
+
+      <!-- Files Section -->
+      <section class="section" id="section-files">
+        <div class="section-header"><h1>Dateien</h1></div>
+        <div class="file-breadcrumb" id="file-breadcrumb"></div>
+        <div class="panels" style="grid-template-columns:1fr 1fr">
+          <div class="panel" style="max-height:80vh;overflow-y:auto">
+            <h2>Workspace</h2>
+            <div id="file-list" class="file-list"></div>
+          </div>
+          <div class="panel" style="max-height:80vh;overflow-y:auto">
+            <h2 id="file-viewer-title">Datei auswählen</h2>
+            <pre id="file-viewer-content" class="file-viewer"><span class="text-muted">Klicke links auf eine Datei</span></pre>
+          </div>
+        </div>
       </section>
 
       <!-- Siri Section -->
@@ -253,6 +401,14 @@
         <button class="btn" onclick="closeModal('modal-ai-schedule')">Abbrechen</button>
         <button class="btn btn-primary" onclick="aiCreateSchedule()">Erstellen</button>
       </div>
+    </div>
+  </div>
+
+  <!-- Command Palette -->
+  <div class="modal-overlay" id="modal-command" onclick="closeModalOverlay(event)">
+    <div class="modal command-palette">
+      <input type="text" id="cmd-input" placeholder="Befehl suchen..." oninput="filterCommands()" autofocus>
+      <div id="cmd-list" class="cmd-list"></div>
     </div>
   </div>
 
