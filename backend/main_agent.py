@@ -79,7 +79,7 @@ class MainAgent:
         self._input_guard = InputGuard()
         self._prefilter = IntentPrefilter()
         self._consolidator = PromptConsolidator()
-        llm_for_router = llm_router.get_client("classify") if llm_router else llm
+        llm_for_router = llm_router.get_client("telegram") if llm_router else llm
         self._output_router = OutputRouter(llm=llm_for_router)
         self.active_agents: dict[str, dict] = {}
         self._pending_tasks: dict[int, asyncio.Task] = {}
@@ -1120,9 +1120,10 @@ class MainAgent:
                             self.obsidian_writer.write_result,
                             title=title, typ=result_type, content=result, project=project,
                         )
+                        obsidian_note = f" in Obsidian ({folder})"
                     except Exception as e:
                         print(f"Obsidian write failed: {e}")
-                    obsidian_note = f" in Obsidian ({folder})" if self._obsidian_enabled() else ""
+                        obsidian_note = ""
                 elif dest == OutputDestination.TASK:
                     new_task_id = await self.db.create_task(
                         TaskData(title=title, description=result[:2000], status=TaskStatus.OPEN)

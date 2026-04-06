@@ -47,3 +47,31 @@ def test_obsidian_folder_for_result_type(router):
     assert router.get_obsidian_folder("code") == "Code"
     assert router.get_obsidian_folder("report") == "Reports"
     assert router.get_obsidian_folder("cheat-sheet") == "Cheat-Sheets"
+
+
+@pytest.mark.asyncio
+async def test_resolve_explicit_obsidian_takes_priority(router):
+    dest = await router.resolve("schreib das in obsidian", "content", "recherche")
+    assert dest == OutputDestination.OBSIDIAN
+
+
+@pytest.mark.asyncio
+async def test_resolve_falls_back_to_default_without_llm(router):
+    router._llm = None
+    dest = await router.resolve("recherchiere KI-Trends", "content", "recherche")
+    assert dest == OutputDestination.OBSIDIAN  # content default = obsidian
+
+
+@pytest.mark.asyncio
+async def test_resolve_uses_llm_inference_from_history(router):
+    # mock returns "obsidian" — history triggers LLM path
+    dest = await router.resolve(
+        "mach das",
+        "action",
+        "recherche",
+        conversation_history=[
+            {"role": "user", "content": "leg es in obsidian ab"},
+            {"role": "assistant", "content": "ok"},
+        ],
+    )
+    assert dest == OutputDestination.OBSIDIAN  # LLM mock returns "obsidian"

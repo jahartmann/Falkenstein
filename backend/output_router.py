@@ -56,6 +56,9 @@ class OutputRouter:
         Returns None if no explicit destination found.
         """
         text = original_prompt.lower()
+        for kw in _OBSIDIAN_KEYWORDS:
+            if kw in text:
+                return OutputDestination.OBSIDIAN
         for kw in _TASK_KEYWORDS:
             if kw in text:
                 return OutputDestination.TASK
@@ -65,9 +68,6 @@ class OutputRouter:
         for kw in _REPLY_KEYWORDS:
             if kw in text:
                 return OutputDestination.REPLY
-        for kw in _OBSIDIAN_KEYWORDS:
-            if kw in text:
-                return OutputDestination.OBSIDIAN
         return None
 
     def get_default_destination(self, intent_type: str, result_type: str | None) -> OutputDestination:
