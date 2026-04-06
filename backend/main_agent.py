@@ -11,6 +11,8 @@ from backend.memory.soul_memory import SoulMemory
 from backend.review_gate import ReviewGate, ReviewResult
 from backend.intent_engine import IntentEngine, ParsedIntent
 from backend.smart_scheduler import SmartScheduler
+from backend.scheduler import Scheduler
+from backend.prompts.schedule import build_schedule_prompt
 
 
 from backend.memory.fact_memory import FactMemory, extract_and_store_facts
@@ -75,29 +77,6 @@ class MainAgent:
         self.active_agents: dict[str, dict] = {}
         self._pending_tasks: dict[int, asyncio.Task] = {}
         self._agent_pool = load_agent_pool()
-
-    async def _build_context(self) -> str:
-        """Build system context from DB for the classify prompt."""
-        parts = []
-        # Active agents from self.active_agents dict
-        if self.active_agents:
-            lines = ["Aktive Agents:"]
-            for aid, info in self.active_agents.items():
-                lines.append(f"  - {aid}: {info.get('task', '?')}")
-            parts.append("\n".join(lines))
-        # Open tasks from DB
-        try:
-            open_tasks = await self.db.get_open_tasks()
-            if open_tasks:
-                lines = ["Offene Tasks:"]
-                for t in open_tasks[:10]:
-                    title = t.title if hasattr(t, 'title') else t.get('title', '?')
-                    status = t.status if hasattr(t, 'status') else t.get('status', '?')
-                    lines.append(f"  - [{status}] {title}")
-                parts.append("\n".join(lines))
-        except Exception:
-            pass
-        return "\n\n".join(parts) if parts else "Keine aktiven Tasks."
 
     async def classify(self, message: str, chat_id: str = "") -> dict:
         # Build system prompt: SOUL + facts + classify instructions + status
@@ -1275,6 +1254,7 @@ class MainAgent:
         # 2. Register in active_agents
         llm = self._get_llm_for("scheduled")
         identity = select_agent(prompt, self._agent_pool)
+        # TODO: use build_schedule_prompt(task['name'], task.get('last_run'), ...) when creating scheduled SubAgent
         sub = DynamicAgent(
             identity=identity, task_description=prompt,
             llm=llm, tools=self.tools, db=self.db,

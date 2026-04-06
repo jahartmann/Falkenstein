@@ -2,7 +2,7 @@
 """SubAgent-Prompts mit expliziten Output-Templates."""
 from __future__ import annotations
 
-_OUTPUT_TEMPLATES: dict[str, str] = {
+OUTPUT_TEMPLATES: dict[str, str] = {
     "recherche": (
         "## Format deiner Antwort\n"
         "Strukturiere dein Ergebnis EXAKT so:\n\n"
@@ -57,9 +57,9 @@ _OUTPUT_TEMPLATES: dict[str, str] = {
     ),
 }
 
-_DEFAULT_TEMPLATE = _OUTPUT_TEMPLATES["recherche"]
+_DEFAULT_TEMPLATE = OUTPUT_TEMPLATES["recherche"]
 
-_BASE_REQUIREMENTS = """\
+BASE_REQUIREMENTS = """\
 ## Anforderungen
 - Antworte EINMAL mit dem vollständigen, fertigen Ergebnis
 - KEIN "Ich habe Punkt 1 erledigt..." — nur das Endergebnis
@@ -75,10 +75,10 @@ def build_subagent_prompt(
     result_type: str = "recherche",
 ) -> str:
     """Build a SubAgent system prompt with the appropriate output template."""
-    template = _OUTPUT_TEMPLATES.get(result_type, _DEFAULT_TEMPLATE)
+    template = OUTPUT_TEMPLATES.get(result_type, _DEFAULT_TEMPLATE)
     return (
         f"Du bist ein {agent_type}-SubAgent im Falkenstein-System.\n\n"
         f"## Deine Aufgabe\n{task}\n\n"
         f"{template}\n\n"
-        f"{_BASE_REQUIREMENTS}"
+        f"{BASE_REQUIREMENTS}"
     )
