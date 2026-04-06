@@ -13,9 +13,19 @@ PROVIDERS = ("local", "claude", "gemini")
 # Default routing: which provider for which task type
 DEFAULT_ROUTING = {
     "classify": "local",
+    "telegram": "local",
     "action": "local",
     "content": "local",
     "scheduled": "local",
+}
+
+# Size map: which task types use light vs heavy model
+_SIZE_MAP: dict[str, str] = {
+    "classify": "light",
+    "telegram": "light",
+    "action": "heavy",
+    "content": "heavy",
+    "scheduled": "heavy",
 }
 
 
@@ -44,6 +54,12 @@ class LLMRouter:
         elif provider == "gemini":
             return self._gemini
         return self.local
+
+    def get_client_with_size(self, task_type: str = "classify") -> tuple:
+        """Return (client, size) where size is 'light' or 'heavy'."""
+        client = self.get_client(task_type)
+        size = _SIZE_MAP.get(task_type, "heavy")
+        return client, size
 
     async def set_routing(self, task_type: str, provider: str):
         """Update routing for a task type and persist."""

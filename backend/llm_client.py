@@ -115,6 +115,28 @@ class LLMClient:
             msg["content"] = strip_thinking(msg["content"])
         return msg
 
+    async def chat_light(self, system_prompt: str = "", messages: list | None = None,
+                         temperature: float = 0.7) -> str:
+        """Chat using the light model (fast, reduced context)."""
+        return await self.chat(
+            system_prompt=system_prompt,
+            messages=messages or [],
+            model=self.model_light,
+            num_ctx=max(4096, self.num_ctx // 4),
+            temperature=temperature,
+        )
+
+    async def chat_heavy(self, system_prompt: str = "", messages: list | None = None,
+                         temperature: float = 0.7) -> str:
+        """Chat using the heavy model (full context, best reasoning)."""
+        return await self.chat(
+            system_prompt=system_prompt,
+            messages=messages or [],
+            model=self.model_heavy,
+            num_ctx=self.num_ctx,
+            temperature=temperature,
+        )
+
     async def confidence_check(self, task_description: str, result: str) -> dict:
         prompt = (
             f"Bewerte dieses Arbeitsergebnis auf einer Skala von 0-10.\n\n"
