@@ -913,48 +913,65 @@ async def update_server():
 
     project_root = _Path(__file__).parent.parent
 
+    async def _run_cmd(cmd: list, cwd: str):
+        """Run a command and yield output lines. Cleans up subprocess on any exit path."""
+        proc = None
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                cwd=cwd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+            async for raw_line in proc.stdout:
+                yield raw_line.decode("utf-8", errors="replace").rstrip()
+            await proc.wait()
+            if proc.returncode != 0:
+                raise RuntimeError(f"exit {proc.returncode}")
+        except Exception:
+            if proc is not None and proc.returncode is None:
+                try:
+                    proc.terminate()
+                    await asyncio.wait_for(proc.wait(), timeout=5.0)
+                except Exception:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+            raise
+
     async def stream_update():
-        # Step 1: git pull
-        yield f"data: {_json.dumps({'line': '$ git pull'})}\n\n"
+        import sys as _sys
         try:
-            proc = await asyncio.create_subprocess_exec(
-                "git", "pull",
-                cwd=str(project_root),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-            )
-            async for raw_line in proc.stdout:
-                line = raw_line.decode("utf-8", errors="replace").rstrip()
-                yield f"data: {_json.dumps({'line': line})}\n\n"
-            await proc.wait()
-            if proc.returncode != 0:
-                yield f"data: {_json.dumps({'status': 'error', 'line': f'git pull fehlgeschlagen (exit {proc.returncode})'})}\n\n"
+            # Step 1: git pull
+            yield f"data: {_json.dumps({'line': '$ git pull'})}\n\n"
+            try:
+                async for line in _run_cmd(["git", "pull"], str(project_root)):
+                    yield f"data: {_json.dumps({'line': line})}\n\n"
+            except RuntimeError as e:
+                yield f"data: {_json.dumps({'status': 'error', 'line': f'git pull fehlgeschlagen ({e})'})}\n\n"
                 return
-        except Exception as e:
-            yield f"data: {_json.dumps({'status': 'error', 'line': str(e)})}\n\n"
-            return
-
-        # Step 2: pip install
-        yield f"data: {_json.dumps({'line': '$ pip install -r requirements.txt'})}\n\n"
-        try:
-            import sys as _sys
-            proc = await asyncio.create_subprocess_exec(
-                _sys.executable, "-m", "pip", "install", "-r", "requirements.txt",
-                cwd=str(project_root),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-            )
-            async for raw_line in proc.stdout:
-                line = raw_line.decode("utf-8", errors="replace").rstrip()
-                yield f"data: {_json.dumps({'line': line})}\n\n"
-            await proc.wait()
-            if proc.returncode != 0:
-                yield f"data: {_json.dumps({'status': 'error', 'line': f'pip install fehlgeschlagen (exit {proc.returncode})'})}\n\n"
+            except Exception as e:
+                yield f"data: {_json.dumps({'status': 'error', 'line': str(e)})}\n\n"
                 return
-        except Exception as e:
-            yield f"data: {_json.dumps({'status': 'error', 'line': str(e)})}\n\n"
-            return
 
-        yield f"data: {_json.dumps({'status': 'done'})}\n\n"
+            # Step 2: pip install
+            yield f"data: {_json.dumps({'line': '$ pip install -r requirements.txt'})}\n\n"
+            try:
+                async for line in _run_cmd(
+                    [_sys.executable, "-m", "pip", "install", "-r", "requirements.txt"],
+                    str(project_root),
+                ):
+                    yield f"data: {_json.dumps({'line': line})}\n\n"
+            except RuntimeError as e:
+                yield f"data: {_json.dumps({'status': 'error', 'line': f'pip install fehlgeschlagen ({e})'})}\n\n"
+                return
+            except Exception as e:
+                yield f"data: {_json.dumps({'status': 'error', 'line': str(e)})}\n\n"
+                return
+
+            yield f"data: {_json.dumps({'status': 'done'})}\n\n"
+        except GeneratorExit:
+            pass  # Client disconnected — subprocess already cleaned up by _run_cmd
 
     return StreamingResponse(stream_update(), media_type="text/event-stream")
