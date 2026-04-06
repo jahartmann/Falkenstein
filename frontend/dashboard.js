@@ -919,6 +919,14 @@ async function openNote(path) {
 
 // ── Health ───────────────────────────────────────────────────────────
 async function loadHealth() {
+  // Auto-refresh Systemmetriken alle 5 Sekunden wenn Sektion aktiv
+  if (!window._healthMetricsInterval) {
+    window._healthMetricsInterval = setInterval(() => {
+      if (document.getElementById('section-health')?.classList.contains('active')) {
+        loadHealthMetrics();
+      }
+    }, 5000);
+  }
   try {
     const data = await api('/health');
 
@@ -969,6 +977,54 @@ async function loadHealth() {
       document.getElementById('health-budget').innerHTML = '<span class="text-muted">Kein Budget konfiguriert</span>';
     }
   } catch (e) { console.error('Health error:', e); }
+  loadHealthMetrics();
+}
+
+function renderMetricBar(pct, color) {
+  const c = color || (pct > 80 ? 'var(--red)' : pct > 60 ? '#f0a500' : 'var(--green)');
+  return `<div style="width:80px;height:6px;background:var(--border);border-radius:3px;display:inline-block;vertical-align:middle;margin-left:4px">
+    <div style="width:${Math.min(pct,100)}%;height:100%;background:${c};border-radius:3px"></div>
+  </div>`;
+}
+
+async function loadHealthMetrics() {
+  const el = document.getElementById('health-system-metrics');
+  if (!el) return;
+  try {
+    const m = await api('/system/metrics');
+    const fmt = (v, unit) => v != null ? `${v}${unit}` : '—';
+    const tempColor = m.cpu_temp_c == null ? 'var(--text-muted)'
+      : m.cpu_temp_c >= 85 ? 'var(--red)'
+      : m.cpu_temp_c >= 70 ? '#f0a500'
+      : 'var(--green)';
+    el.innerHTML = `
+      <div style="display:flex;align-items:center;gap:6px;font-size:13px">
+        <span class="text-muted">CPU</span>
+        <strong>${fmt(m.cpu_percent, '%')}</strong>
+        ${m.cpu_percent != null ? renderMetricBar(m.cpu_percent) : ''}
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;font-size:13px">
+        <span class="text-muted">RAM</span>
+        <strong>${m.ram_used_gb != null ? `${m.ram_used_gb}/${m.ram_total_gb} GB (${m.ram_percent}%)` : '—'}</strong>
+        ${m.ram_percent != null ? renderMetricBar(m.ram_percent) : ''}
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;font-size:13px">
+        <span class="text-muted">Temp</span>
+        <strong style="color:${tempColor}">${fmt(m.cpu_temp_c, '°C')}</strong>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;font-size:13px">
+        <span class="text-muted">Watts</span>
+        <strong>${fmt(m.cpu_watts, ' W')}</strong>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;font-size:13px">
+        <span class="text-muted">GPU</span>
+        <strong>${fmt(m.gpu_percent, '%')}</strong>
+        ${m.gpu_percent != null ? renderMetricBar(m.gpu_percent) : ''}
+      </div>
+    `;
+  } catch {
+    el.innerHTML = '<span class="text-muted" style="font-size:12px">Metriken nicht verfügbar</span>';
+  }
 }
 
 async function updateRouting(task, provider) {

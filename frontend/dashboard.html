@@ -312,6 +312,10 @@
       <section class="section" id="section-health">
         <div class="section-header"><h1>System Health</h1><button class="btn" onclick="loadHealth()">Aktualisieren</button></div>
         <div class="stats-row" id="health-stats"></div>
+        <!-- Kompakte Systemmetriken-Leiste -->
+        <div id="health-system-metrics" style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:16px;padding:12px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius)">
+          <span class="text-muted" style="font-size:12px">Lade Systemmetriken...</span>
+        </div>
         <div class="panels">
           <div class="panel">
             <h2>Ollama</h2>
