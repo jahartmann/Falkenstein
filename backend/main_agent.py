@@ -16,6 +16,7 @@ from backend.smart_scheduler import SmartScheduler
 from backend.memory.fact_memory import FactMemory, extract_and_store_facts
 from backend.llm_router import LLMRouter
 from backend.security.input_guard import InputGuard
+from backend.prompts.classify import build_classify_prompt
 
 _ENRICH_PROMPT_SYSTEM = (
     "Du bist ein Prompt-Engineer. Der Nutzer gibt dir eine kurze Aufgabenbeschreibung "
@@ -43,33 +44,6 @@ _SCHEDULE_META_SYSTEM = (
 _SOUL_PATH = Path(__file__).parent.parent / "SOUL.md"
 _SOUL_CONTENT = _SOUL_PATH.read_text(encoding="utf-8") if _SOUL_PATH.exists() else ""
 
-_CLASSIFY_SYSTEM = (
-    "Du bist Falki, ein intelligenter Assistent-Router. Analysiere die Nachricht und entscheide:\n\n"
-    "1. quick_reply — Direkt beantwortbar (Fragen, Status, Smalltalk, kurze Infos)\n"
-    "2. action — Der Nutzer will, dass du etwas TUST (optimiere, erstelle, ändere, konfiguriere, "
-    "installiere, repariere). Hier wird KEIN Report geschrieben — du führst einfach aus.\n"
-    "3. content — Der Nutzer will ein ERGEBNIS sehen (Recherche, Analyse, Guide, Zusammenfassung, "
-    "Code schreiben). Hier wird das Ergebnis nach Obsidian geschrieben.\n\n"
-    "4. multi_step — Der Nutzer will eine Aufgabe, die mehrere Schritte erfordert "
-    "(z.B. 'Recherchiere X und schreibe dann einen Blogpost', 'Vergleiche A und B und erstelle eine Zusammenfassung'). "
-    "Hier werden mehrere Agents nacheinander ausgeführt.\n\n"
-    "5. ops_command — Der Nutzer will einen System-/Server-Befehl ausführen "
-    "(git pull, cd, ls, server starten/stoppen, update, logs anzeigen, Ordner ansehen). "
-    "Auch wenn er es umgangssprachlich formuliert ('pull mal', 'update den code', 'zeig mir den ordner', "
-    "'starte das skript'). Nutze dafür das ops_executor Tool.\n\n"
-    "WICHTIG: Wenn der Nutzer sagt 'optimiere X', 'stelle X ein', 'mach X' → das ist eine ACTION.\n"
-    "Nur wenn er 'recherchiere', 'analysiere', 'erstelle einen Report/Guide' sagt → das ist CONTENT.\n\n"
-    "Bei quick_reply: Beantworte die Frage direkt.\n"
-    "Bei action/content: Bestimme den passenden Agent-Typ.\n\n"
-    "Der passende Agent wird automatisch ausgewählt.\n"
-    "Ergebnis-Typen (nur bei content): recherche, guide, cheat-sheet, code, report\n\n"
-    "Antworte NUR mit JSON:\n"
-    '- quick_reply: {"type": "quick_reply", "answer": "<deine Antwort>"}\n'
-    '- action: {"type": "action", "agent": "<typ>", "title": "<kurzer Titel>"}\n'
-    '- content: {"type": "content", "agent": "<typ>", "result_type": "<typ>", "title": "<kurzer Titel>"}\n'
-    '- multi_step: {"type": "multi_step", "title": "<Titel>", "steps": [{"agent": "<typ>", "task": "<Beschreibung>"}, ...]}\n'
-    '- ops_command: {"type": "ops_command", "command_hint": "<was der user will>", "title": "<kurzer Titel>"}\n'
-)
 
 
 class MainAgent:
@@ -126,7 +100,6 @@ class MainAgent:
         return "\n\n".join(parts) if parts else "Keine aktiven Tasks."
 
     async def classify(self, message: str, chat_id: str = "") -> dict:
-        context = await self._build_context()
         # Build system prompt: SOUL + facts + classify instructions + status
         parts = []
         if _SOUL_CONTENT:
@@ -155,8 +128,28 @@ class MainAgent:
                 parts.append(past_block)
         except Exception:
             pass
-        parts.append(_CLASSIFY_SYSTEM)
-        parts.append(f"\n## Aktueller System-Status\n{context}")
+        # Build active_agents string for classify prompt
+        active_agents_str = "\n".join(
+            f"  {aid}: {info.get('task', '?')}"
+            for aid, info in self.active_agents.items()
+        ) if self.active_agents else ""
+        # Build open_tasks string for classify prompt
+        open_tasks_str = ""
+        try:
+            open_tasks = await self.db.get_open_tasks()
+            if open_tasks:
+                open_tasks_str = "\n".join(
+                    f"  - [{t.status if hasattr(t, 'status') else t.get('status', '?')}] "
+                    f"{t.title if hasattr(t, 'title') else t.get('title', '?')}"
+                    for t in open_tasks[:10]
+                )
+        except Exception:
+            pass
+        parts.append(build_classify_prompt(
+            active_agents=active_agents_str,
+            open_tasks=open_tasks_str,
+            workspace=getattr(self, '_active_workspace', ''),
+        ))
         system = "\n\n".join(parts)
         llm = self.llm_router.get_client("classify") if self.llm_router else self.llm
         history = await self.db.get_chat_history(chat_id or "default", limit=10)
