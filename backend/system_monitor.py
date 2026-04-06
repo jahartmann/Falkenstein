@@ -83,6 +83,7 @@ class SystemMonitor:
 
     async def _run_powermetrics(self) -> dict[str, float | None]:
         """Run powermetrics once and return parsed extended metrics."""
+        proc = None
         try:
             proc = await asyncio.create_subprocess_exec(
                 *_PM_COMMAND,
@@ -94,13 +95,18 @@ class SystemMonitor:
                 return {}
             # powermetrics may emit multiple JSON objects; take the last complete one
             raw = stdout.decode("utf-8", errors="replace").strip()
-            # Find the last '{' to locate the final JSON object
             last_brace = raw.rfind("\n{")
             if last_brace != -1:
                 raw = raw[last_brace:].strip()
             data = json.loads(raw)
             return self._parse_powermetrics(data)
         except Exception:
+            if proc is not None:
+                try:
+                    proc.kill()
+                    await proc.wait()
+                except Exception:
+                    pass
             return {}
 
     def _parse_powermetrics(self, data: dict) -> dict[str, float | None]:
