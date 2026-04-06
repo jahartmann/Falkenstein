@@ -72,3 +72,28 @@ def test_parse_powermetrics_missing_fields_returns_none():
     assert result["cpu_watts"] is None
     assert result["cpu_temp_c"] is None
     assert result["gpu_percent"] is None
+
+
+@pytest.mark.asyncio
+async def test_system_metrics_endpoint():
+    """Test /api/admin/system/metrics returns all required keys."""
+    from httpx import AsyncClient
+    from fastapi import FastAPI
+    from backend.admin_api import router
+    import backend.admin_api as admin_module
+
+    # Wire a real SystemMonitor
+    monitor = SystemMonitor()
+    admin_module._system_monitor = monitor
+
+    app = FastAPI()
+    app.include_router(router)
+
+    async with AsyncClient(app=app, base_url="http://test") as ac:
+        resp = await ac.get("/api/admin/system/metrics")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "cpu_percent" in data
+    assert "ram_used_gb" in data
+    assert "disk_percent" in data

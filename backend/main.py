@@ -38,6 +38,7 @@ from backend.tools.self_config import SelfConfigTool
 from backend.tools.ops_executor import OpsExecutor
 from backend.memory.fact_memory import FactMemory
 from backend.llm_router import LLMRouter
+from backend.system_monitor import SystemMonitor
 
 db: Database = None
 fact_memory: FactMemory = None
@@ -126,6 +127,10 @@ async def lifespan(app: FastAPI):
     llm = LLMClient(config=llm_config)
     llm_router = LLMRouter(local_llm=llm, config_service=config_service)
 
+    # System Monitor
+    system_monitor = SystemMonitor()
+    await system_monitor.start()
+
     # 5. Tools (use config_service for paths)
     vault_path = config_service.get_path("obsidian_vault_path")
     workspace = config_service.get_path("workspace_path")
@@ -197,7 +202,7 @@ async def lifespan(app: FastAPI):
         db=db, scheduler=scheduler, config_service=config_service,
         main_agent=main_agent, budget_tracker=budget_tracker,
         llm_router=llm_router, fact_memory=fact_memory,
-        soul_memory=soul_memory,
+        soul_memory=soul_memory, system_monitor=system_monitor,
     )
     admin_api.init(start_time=_time.time())
 
@@ -249,6 +254,7 @@ async def lifespan(app: FastAPI):
             pass
     if scheduler:
         await scheduler.stop()
+    await system_monitor.stop()
     await db.close()
 
 

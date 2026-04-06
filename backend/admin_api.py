@@ -23,15 +23,17 @@ _budget_tracker = None
 _llm_router = None
 _fact_memory = None
 _soul_memory = None
+_system_monitor = None
 
 
 def set_dependencies(db=None, scheduler=None, config_service=None,
                      main_agent=None, budget_tracker=None, llm_router=None,
-                     fact_memory=None, soul_memory=None):
-    global _db, _scheduler, _config_service, _main_agent, _budget_tracker, _llm_router, _fact_memory, _soul_memory
+                     fact_memory=None, soul_memory=None, system_monitor=None):
+    global _db, _scheduler, _config_service, _main_agent, _budget_tracker, _llm_router, _fact_memory, _soul_memory, _system_monitor
     _db = db; _scheduler = scheduler; _config_service = config_service
     _main_agent = main_agent; _budget_tracker = budget_tracker; _llm_router = llm_router
     _fact_memory = fact_memory; _soul_memory = soul_memory
+    _system_monitor = system_monitor
 
 
 def init(start_time: float):
@@ -888,3 +890,13 @@ async def get_chat_history(limit: int = 50):
             for r in reversed(list(rows))
         ]
     }
+
+
+# ── System Monitor ────────────────────────────────────────────────────
+
+@router.get("/system/metrics")
+async def get_system_metrics():
+    """Return current system resource metrics (CPU, RAM, GPU, Temp, Watts)."""
+    if _system_monitor is None:
+        return {"error": "SystemMonitor not initialized"}
+    return _system_monitor.get_metrics()
