@@ -841,7 +841,8 @@ async def pull_ollama_model(req: OllamaPullRequest):
                             yield f"data: {line}\n\n"
             yield 'data: {"status": "success"}\n\n'
         except Exception as e:
-            yield f'data: {{"error": "{str(e)}"}}\n\n'
+            import json as _json
+            yield f"data: {_json.dumps({'error': str(e)})}\n\n"
 
     return StreamingResponse(stream_pull(), media_type="text/event-stream")
 

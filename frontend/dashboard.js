@@ -1241,7 +1241,7 @@ function renderOllamaModal(models) {
       <td><code>${esc(m.name)}</code></td>
       <td>${m.size_gb} GB</td>
       <td>${m.modified_at ? new Date(m.modified_at).toLocaleDateString('de') : '—'}</td>
-      <td><button class="btn-danger btn-sm" onclick="deleteOllamaModel('${esc(m.name)}')">🗑</button></td>
+      <td><button class="btn-danger btn-sm" data-model="${esc(m.name)}" onclick="deleteOllamaModel(this.getAttribute('data-model'))">🗑</button></td>
     </tr>`).join('');
   return `
   <div id="ollama-modal" class="modal-overlay" onclick="if(event.target===this)closeOllamaModal()">
@@ -1292,36 +1292,41 @@ async function pullOllamaModel() {
   const headers = { 'Content-Type': 'application/json' };
   if (token) headers['Authorization'] = 'Bearer ' + token;
 
-  const resp = await fetch('/api/admin/ollama/pull', {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({ model: modelName }),
-  });
-  const reader = resp.body.getReader();
-  const decoder = new TextDecoder();
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    const text = decoder.decode(value);
-    const lines = text.split('\n').filter(l => l.startsWith('data: '));
-    for (const line of lines) {
-      try {
-        const data = JSON.parse(line.slice(6));
-        if (!progressEl) continue;
-        if (data.status === 'success') {
-          progressEl.textContent = '✅ Download abgeschlossen';
-          closeOllamaModal();
-          await openOllamaModal();
-        } else if (data.error) {
-          progressEl.textContent = '❌ Fehler: ' + data.error;
-        } else {
-          const pct = data.completed && data.total
-            ? Math.round(data.completed / data.total * 100) + '%'
-            : data.status || '';
-          progressEl.textContent = pct;
-        }
-      } catch {}
+  try {
+    const resp = await fetch('/api/admin/ollama/pull', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ model: modelName }),
+    });
+    if (!resp.body) throw new Error('Kein Response-Body');
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const text = decoder.decode(value);
+      const lines = text.split('\n').filter(l => l.startsWith('data: '));
+      for (const line of lines) {
+        try {
+          const data = JSON.parse(line.slice(6));
+          if (!progressEl) continue;
+          if (data.status === 'success') {
+            progressEl.textContent = '✅ Download abgeschlossen';
+            closeOllamaModal();
+            await openOllamaModal();
+          } else if (data.error) {
+            progressEl.textContent = '❌ Fehler: ' + data.error;
+          } else {
+            const pct = data.completed && data.total
+              ? Math.round(data.completed / data.total * 100) + '%'
+              : data.status || '';
+            progressEl.textContent = pct;
+          }
+        } catch {}
+      }
     }
+  } catch (err) {
+    if (progressEl) progressEl.textContent = '❌ Verbindungsfehler: ' + err.message;
   }
 }
 
