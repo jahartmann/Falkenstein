@@ -396,21 +396,53 @@ async function aiCreateSchedule() {
 // Config
 const CONFIG_CATEGORIES = {
   'Server': ['api_token','telegram_bot_token','telegram_chat_id','telegram_allowed_chat_ids','port'],
-  'LLM': ['ollama_host','ollama_model','ollama_model_light','ollama_model_heavy','ollama_num_ctx','ollama_num_ctx_extended','llm_max_retries','llm_provider_classify','llm_provider_action','llm_provider_content','llm_provider_scheduled','cli_provider','cli_daily_token_budget'],
+  'Modelle': ['ollama_host','ollama_model_light','ollama_model_heavy','ollama_model','ollama_num_ctx','ollama_num_ctx_extended','llm_max_retries'],
+  'LLM Routing': ['llm_provider_classify','llm_provider_action','llm_provider_content','llm_provider_scheduled','cli_provider','cli_daily_token_budget'],
   'Pfade': ['obsidian_vault_path','workspace_path'],
   'Persönlichkeit': ['soul_prompt'],
   'API Keys': ['brave_api_key'],
   'Allgemein': ['obsidian_enabled','obsidian_auto_knowledge'],
 };
+const CONFIG_LABELS = {
+  'ollama_host': 'Ollama Server',
+  'ollama_model_light': 'Kleines Modell (Routing, Chat, Klassifizierung)',
+  'ollama_model_heavy': 'Großes Modell (Recherche, Code, Tasks)',
+  'ollama_model': 'Fallback-Modell (wenn kein Light/Heavy gesetzt)',
+  'ollama_num_ctx': 'Kontext-Fenster (Standard)',
+  'ollama_num_ctx_extended': 'Kontext-Fenster (Erweitert)',
+  'llm_max_retries': 'Max. Wiederholungsversuche',
+  'llm_provider_classify': 'Klassifizierung',
+  'llm_provider_action': 'Aktionen (Ops, Shell)',
+  'llm_provider_content': 'Inhalte (Recherche, Guides)',
+  'llm_provider_scheduled': 'Geplante Tasks',
+  'cli_provider': 'Premium CLI (claude / gemini)',
+  'cli_daily_token_budget': 'Tages-Token-Budget (CLI)',
+  'api_token': 'API Token',
+  'telegram_bot_token': 'Telegram Bot Token',
+  'telegram_chat_id': 'Telegram Chat ID',
+  'telegram_allowed_chat_ids': 'Erlaubte Chat IDs',
+  'port': 'Port',
+  'obsidian_vault_path': 'Obsidian Vault Pfad',
+  'workspace_path': 'Workspace Pfad',
+  'brave_api_key': 'Brave API Key',
+  'obsidian_enabled': 'Obsidian aktiviert',
+  'obsidian_auto_knowledge': 'Auto-Wissensbase',
+  'soul_prompt': 'Persönlichkeit / Soul Prompt',
+};
+const MODEL_SELECT_KEYS = new Set(['ollama_model_light', 'ollama_model_heavy', 'ollama_model']);
 const TEXTAREA_KEYS = new Set(['soul_prompt']);
 const PASSWORD_KEYS = new Set(['brave_api_key', 'api_token', 'telegram_bot_token']);
 const PATH_KEYS = new Set(['obsidian_vault_path', 'workspace_path']);
 
 async function loadConfig() {
   try {
-    const data = await api('/config');
+    const [data, ollamaModels] = await Promise.all([
+      api('/config'),
+      api('/ollama/models').catch(() => ({ models: [] })),
+    ]);
     const container = document.getElementById('config-container');
     const items = data.config || [];
+    const modelNames = (ollamaModels.models || []).map(m => m.name || m);
     const configMap = {};
     items.forEach(item => { const key = item.key || ''; const value = item.value || ''; if (key) configMap[key] = value; });
     const assigned = new Set();
@@ -424,11 +456,28 @@ async function loadConfig() {
     for (const [cat, entries] of Object.entries(groups)) {
       const keys = Object.keys(entries);
       if (keys.length === 0) continue;
-      html += `<div class="config-group"><h3>${esc(cat)}</h3>`;
+      const catDesc = cat === 'Modelle'
+        ? '<p style="font-size:12px;color:var(--text-muted);margin:0 0 12px">Kleines Modell für schnelle Antworten und Routing — Großes Modell für Recherchen, Code und komplexe Tasks.</p>'
+        : '';
+      html += `<div class="config-group"><h3>${esc(cat)}</h3>${catDesc}`;
       keys.forEach(key => {
         const val = entries[key];
-        html += `<div class="config-row"><label>${esc(key)}</label>`;
-        if (TEXTAREA_KEYS.has(key)) {
+        const label = CONFIG_LABELS[key] || key;
+        html += `<div class="config-row"><label title="${esc(key)}">${esc(label)}</label>`;
+        if (MODEL_SELECT_KEYS.has(key) && modelNames.length > 0) {
+          html += `<div style="display:flex;gap:6px;flex:1">`;
+          html += `<select data-key="${esc(key)}" style="flex:1">`;
+          html += `<option value="">— leer (Fallback) —</option>`;
+          modelNames.forEach(m => {
+            const sel = m === val ? ' selected' : '';
+            html += `<option value="${esc(m)}"${sel}>${esc(m)}</option>`;
+          });
+          html += `</select>`;
+          if (val && !modelNames.includes(val)) {
+            html += `<span style="font-size:11px;color:var(--text-muted);align-self:center" title="Aktueller Wert nicht in Ollama-Liste">${esc(val)} ⚠</span>`;
+          }
+          html += `</div>`;
+        } else if (TEXTAREA_KEYS.has(key)) {
           html += `<textarea data-key="${esc(key)}" rows="4">${esc(val)}</textarea>`;
         } else if (PASSWORD_KEYS.has(key)) {
           html += `<input type="password" data-key="${esc(key)}" value="${esc(val)}">`;
