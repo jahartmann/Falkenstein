@@ -40,16 +40,16 @@ class PromptConsolidator:
         if len(points) == 1:
             return points[0]
 
-        # Join points into a single flowing instruction
-        # First point: main task
-        # Subsequent points: "und dann", "anschließend", "zuletzt"
-        connectors = ["", " und dann ", " anschließend ", " zuletzt ", " außerdem "]
+        # Join points into a single flowing instruction.
+        # Only single-line points are supported — multi-line sub-items are not extracted.
+        # connectors[0] applies to the 2nd point (i=1), connectors[1] to the 3rd, etc.
+        connectors = [" und dann ", " anschließend ", " zuletzt ", " außerdem "]
         parts = []
         for i, point in enumerate(points):
             if i == 0:
                 parts.append(point)
-            elif i < len(connectors):
-                parts.append(connectors[i] + point)
+            elif i - 1 < len(connectors):
+                parts.append(connectors[i - 1] + point)
             else:
                 parts.append(" sowie " + point)
 

@@ -68,3 +68,13 @@ def test_consolidate_single_item_unchanged():
     result, was_consolidated = consolidator.consolidate(text)
     assert was_consolidated is False
     assert result == text
+
+
+def test_extract_points_only_captures_first_line_of_multiline_point():
+    """Multi-line sub-items are not supported — only the first line per point is extracted."""
+    consolidator = PromptConsolidator()
+    text = "1. Recherchiere KI-Trends,\n   besonders im Bereich AGI\n2. Erstelle Guide"
+    points = consolidator.extract_points(text)
+    # Only the first line of point 1 is captured
+    assert len(points) == 2
+    assert points[0] == "Recherchiere KI-Trends,"
