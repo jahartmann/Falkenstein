@@ -37,6 +37,10 @@ def test_default_action_goes_to_reply(router):
     dest = router.get_default_destination("action", None)
     assert dest == OutputDestination.REPLY
 
+def test_default_multi_step_goes_to_obsidian(router):
+    dest = router.get_default_destination("multi_step", "recherche")
+    assert dest == OutputDestination.OBSIDIAN
+
 def test_obsidian_folder_for_result_type(router):
     assert router.get_obsidian_folder("recherche") == "Recherchen"
     assert router.get_obsidian_folder("guide") == "Guides"
