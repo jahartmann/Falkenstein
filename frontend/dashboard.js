@@ -1224,6 +1224,107 @@ function openChatFilePicker() {
   loadFilePicker('');
 }
 
+// ── Ollama Model Browser ──────────────────────────────────────────────
+
+async function loadOllamaModels() {
+  try {
+    const data = await api('/ollama/models');
+    return data.models || [];
+  } catch {
+    return [];
+  }
+}
+
+function renderOllamaModal(models) {
+  const rows = models.map(m => `
+    <tr>
+      <td><code>${esc(m.name)}</code></td>
+      <td>${m.size_gb} GB</td>
+      <td>${m.modified_at ? new Date(m.modified_at).toLocaleDateString('de') : '—'}</td>
+      <td><button class="btn-danger btn-sm" onclick="deleteOllamaModel('${esc(m.name)}')">🗑</button></td>
+    </tr>`).join('');
+  return `
+  <div id="ollama-modal" class="modal-overlay" onclick="if(event.target===this)closeOllamaModal()">
+    <div class="modal-box">
+      <h3>Modell-Manager</h3>
+      <table class="ollama-table">
+        <thead><tr><th>Modell</th><th>Größe</th><th>Datum</th><th></th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="4">Keine Modelle gefunden</td></tr>'}</tbody>
+      </table>
+      <div class="pull-row" style="margin-top:12px;display:flex;gap:8px;">
+        <input id="pull-model-input" type="text" placeholder="z.B. gemma3:4b" style="flex:1">
+        <button onclick="pullOllamaModel()">⬇ Pullen</button>
+      </div>
+      <div id="pull-progress" style="margin-top:8px;min-height:20px;font-size:0.9em;color:#666"></div>
+      <button onclick="closeOllamaModal()" style="margin-top:12px">Schließen</button>
+    </div>
+  </div>`;
+}
+
+async function openOllamaModal() {
+  const models = await loadOllamaModels();
+  document.body.insertAdjacentHTML('beforeend', renderOllamaModal(models));
+}
+
+function closeOllamaModal() {
+  document.getElementById('ollama-modal')?.remove();
+}
+
+async function deleteOllamaModel(name) {
+  if (!confirm(`Modell "${name}" löschen?`)) return;
+  const result = await api(`/ollama/models/${encodeURIComponent(name)}`, { method: 'DELETE' });
+  if (result.status === 'deleted') {
+    closeOllamaModal();
+    await openOllamaModal();
+  } else {
+    alert('Fehler: ' + (result.detail || 'Unbekannt'));
+  }
+}
+
+async function pullOllamaModel() {
+  const input = document.getElementById('pull-model-input');
+  const modelName = input?.value?.trim();
+  if (!modelName) return;
+  const progressEl = document.getElementById('pull-progress');
+  if (progressEl) progressEl.textContent = 'Starte Download...';
+
+  const token = localStorage.getItem('falkenstein_token') || '';
+  const headers = { 'Content-Type': 'application/json' };
+  if (token) headers['Authorization'] = 'Bearer ' + token;
+
+  const resp = await fetch('/api/admin/ollama/pull', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ model: modelName }),
+  });
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const text = decoder.decode(value);
+    const lines = text.split('\n').filter(l => l.startsWith('data: '));
+    for (const line of lines) {
+      try {
+        const data = JSON.parse(line.slice(6));
+        if (!progressEl) continue;
+        if (data.status === 'success') {
+          progressEl.textContent = '✅ Download abgeschlossen';
+          closeOllamaModal();
+          await openOllamaModal();
+        } else if (data.error) {
+          progressEl.textContent = '❌ Fehler: ' + data.error;
+        } else {
+          const pct = data.completed && data.total
+            ? Math.round(data.completed / data.total * 100) + '%'
+            : data.status || '';
+          progressEl.textContent = pct;
+        }
+      } catch {}
+    }
+  }
+}
+
 // Init
 loadDashboard();
 connectWS();

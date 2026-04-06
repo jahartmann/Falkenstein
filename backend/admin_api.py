@@ -783,6 +783,92 @@ async def read_file(path: str):
         return {"error": str(e)}
 
 
+# ── Ollama Model Browser ──────────────────────────────────────────────
+
+class OllamaPullRequest(BaseModel):
+    model: str
+
+
+@router.get("/ollama/models")
+async def list_ollama_models():
+    """List all locally available Ollama models."""
+    import httpx
+    ollama_host = "http://localhost:11434"
+    if _config_service:
+        saved = _config_service.get("ollama_host")
+        if saved:
+            ollama_host = saved
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(f"{ollama_host}/api/tags")
+            resp.raise_for_status()
+            data = resp.json()
+            models = []
+            for m in data.get("models", []):
+                models.append({
+                    "name": m.get("name", ""),
+                    "size_gb": round(m.get("size", 0) / 1e9, 1),
+                    "modified_at": m.get("modified_at", ""),
+                    "parameter_size": m.get("details", {}).get("parameter_size", ""),
+                })
+            return {"models": models}
+    except Exception as e:
+        return {"models": [], "error": str(e)}
+
+
+@router.post("/ollama/pull")
+async def pull_ollama_model(req: OllamaPullRequest):
+    """Pull an Ollama model. Returns SSE stream of progress."""
+    import httpx
+    from fastapi.responses import StreamingResponse
+
+    ollama_host = "http://localhost:11434"
+    if _config_service:
+        saved = _config_service.get("ollama_host")
+        if saved:
+            ollama_host = saved
+
+    async def stream_pull():
+        try:
+            async with httpx.AsyncClient(timeout=600.0) as client:
+                async with client.stream(
+                    "POST",
+                    f"{ollama_host}/api/pull",
+                    json={"name": req.model, "stream": True},
+                ) as resp:
+                    async for line in resp.aiter_lines():
+                        if line:
+                            yield f"data: {line}\n\n"
+            yield 'data: {"status": "success"}\n\n'
+        except Exception as e:
+            yield f'data: {{"error": "{str(e)}"}}\n\n'
+
+    return StreamingResponse(stream_pull(), media_type="text/event-stream")
+
+
+@router.delete("/ollama/models/{model_name:path}")
+async def delete_ollama_model(model_name: str):
+    """Delete a local Ollama model."""
+    import httpx
+    ollama_host = "http://localhost:11434"
+    if _config_service:
+        saved = _config_service.get("ollama_host")
+        if saved:
+            ollama_host = saved
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.request(
+                "DELETE",
+                f"{ollama_host}/api/delete",
+                json={"name": model_name},
+            )
+            if resp.status_code == 200:
+                return {"status": "deleted", "model": model_name}
+            return {"status": "error", "detail": resp.text}
+    except Exception as e:
+        return {"status": "error", "detail": str(e)}
+
+
 # ── Chat History ─────────────────────────────────────────────────────
 
 @router.get("/chat-history")
