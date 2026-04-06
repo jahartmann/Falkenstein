@@ -1352,7 +1352,12 @@ async function refreshWorkspaceBadge() {
   if (existing) existing.remove();
 
   try {
-    const data = await api('/../../api/workspace/current');
+    const token = localStorage.getItem('falkenstein_token') || '';
+    const resp = await fetch('/api/workspace/current', {
+      headers: token ? { 'Authorization': 'Bearer ' + token } : {},
+    });
+    if (!resp.ok) return;
+    const data = await resp.json();
     if (!data.active) return;
 
     const badge = document.createElement('div');
@@ -1466,3 +1471,4 @@ async function clearWorkspace() {
 // Init
 loadDashboard();
 connectWS();
+initWorkspaceButton();

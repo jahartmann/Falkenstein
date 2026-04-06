@@ -55,8 +55,12 @@ async def upload_workspace_file(
     upload_dir = _UPLOAD_BASE / session_id
     upload_dir.mkdir(parents=True, exist_ok=True)
 
-    dest = upload_dir / (file.filename or "upload")
+    safe_name = Path(file.filename or "upload").name
+    dest = upload_dir / safe_name
     content = await file.read()
+    max_size = 10 * 1024 * 1024  # 10 MB
+    if len(content) > max_size:
+        raise HTTPException(status_code=413, detail=f"Datei zu groß (max 10 MB, erhalten: {len(content) // 1024 // 1024} MB)")
     dest.write_bytes(content)
 
     _sessions[session_id] = {
