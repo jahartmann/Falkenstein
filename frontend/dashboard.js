@@ -1330,6 +1330,139 @@ async function pullOllamaModel() {
   }
 }
 
+// ── Workspace-Kontext-Anhang ──────────────────────────────────────────────
+
+async function initWorkspaceButton() {
+  const chatForm = document.getElementById('chat-form') || document.querySelector('.chat-input-row');
+  if (!chatForm) return;
+
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.id = 'workspace-btn';
+  btn.title = 'Workspace anhängen';
+  btn.textContent = '+';
+  btn.onclick = toggleWorkspaceMenu;
+  chatForm.prepend(btn);
+
+  await refreshWorkspaceBadge();
+}
+
+async function refreshWorkspaceBadge() {
+  const existing = document.getElementById('workspace-badge');
+  if (existing) existing.remove();
+
+  try {
+    const data = await api('/../../api/workspace/current');
+    if (!data.active) return;
+
+    const badge = document.createElement('div');
+    badge.id = 'workspace-badge';
+    badge.style.cssText = 'padding:4px 8px;background:#e8f4f8;border-radius:4px;font-size:0.85em;display:flex;align-items:center;gap:8px;margin-top:4px;';
+    badge.innerHTML = `📁 ${esc(data.path)} <span style="cursor:pointer;font-weight:bold;" onclick="clearWorkspace()">✕</span>`;
+    const chatInput = document.getElementById('chat-input') || document.querySelector('textarea');
+    if (chatInput) chatInput.parentNode.insertBefore(badge, chatInput.nextSibling);
+  } catch {}
+}
+
+function toggleWorkspaceMenu() {
+  const existing = document.getElementById('workspace-menu');
+  if (existing) { existing.remove(); return; }
+
+  const menu = document.createElement('div');
+  menu.id = 'workspace-menu';
+  menu.style.cssText = 'position:absolute;background:white;border:1px solid #ddd;border-radius:6px;padding:4px;z-index:1000;display:flex;flex-direction:column;gap:4px;min-width:200px;box-shadow:0 2px 8px rgba(0,0,0,0.15);';
+  menu.innerHTML = `
+    <button onclick="pickWorkspaceFile()">📄 Datei hochladen</button>
+    <button onclick="pickWorkspaceFolder()">📁 Ordner hochladen</button>
+    <button onclick="pickWorkspaceDirectory()">📂 Verzeichnis wählen</button>
+  `;
+  const btn = document.getElementById('workspace-btn');
+  if (btn) btn.after(menu);
+  setTimeout(() => {
+    document.addEventListener('click', function closeMenu(e) {
+      if (!menu.contains(e.target) && e.target.id !== 'workspace-btn') {
+        menu.remove();
+        document.removeEventListener('click', closeMenu);
+      }
+    });
+  }, 10);
+}
+
+function pickWorkspaceFile() {
+  document.getElementById('workspace-menu')?.remove();
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.onchange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const form = new FormData();
+    form.append('file', file);
+    const token = localStorage.getItem('falkenstein_token') || '';
+    await fetch('/api/workspace/upload', {
+      method: 'POST',
+      headers: token ? { 'Authorization': 'Bearer ' + token } : {},
+      body: form,
+    });
+    await refreshWorkspaceBadge();
+  };
+  input.click();
+}
+
+function pickWorkspaceFolder() {
+  document.getElementById('workspace-menu')?.remove();
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.webkitdirectory = true;
+  input.onchange = async (e) => {
+    const files = Array.from(e.target.files);
+    if (!files.length) return;
+    const form = new FormData();
+    form.append('file', files[0]);
+    const token = localStorage.getItem('falkenstein_token') || '';
+    await fetch('/api/workspace/upload', {
+      method: 'POST',
+      headers: token ? { 'Authorization': 'Bearer ' + token } : {},
+      body: form,
+    });
+    await refreshWorkspaceBadge();
+  };
+  input.click();
+}
+
+async function pickWorkspaceDirectory() {
+  document.getElementById('workspace-menu')?.remove();
+  if (!window.showDirectoryPicker) {
+    const path = prompt('Verzeichnis-Pfad eingeben (showDirectoryPicker nicht unterstützt):');
+    if (path) await setWorkspacePath(path);
+    return;
+  }
+  try {
+    const dirHandle = await window.showDirectoryPicker();
+    await setWorkspacePath(dirHandle.name);
+  } catch (e) {
+    if (e.name !== 'AbortError') console.error(e);
+  }
+}
+
+async function setWorkspacePath(path) {
+  const token = localStorage.getItem('falkenstein_token') || '';
+  await fetch('/api/workspace/path', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...(token ? { 'Authorization': 'Bearer ' + token } : {}) },
+    body: JSON.stringify({ path }),
+  });
+  await refreshWorkspaceBadge();
+}
+
+async function clearWorkspace() {
+  const token = localStorage.getItem('falkenstein_token') || '';
+  await fetch('/api/workspace/current', {
+    method: 'DELETE',
+    headers: token ? { 'Authorization': 'Bearer ' + token } : {},
+  });
+  document.getElementById('workspace-badge')?.remove();
+}
+
 // Init
 loadDashboard();
 connectWS();

@@ -22,6 +22,7 @@ from backend.prompts.classify import build_classify_prompt
 from backend.intent_prefilter import IntentPrefilter, PrefilterResult
 from backend.prompt_consolidator import PromptConsolidator
 from backend.output_router import OutputRouter, OutputDestination
+from backend.workspace_api import get_workspace_context
 
 _ENRICH_PROMPT_SYSTEM = (
     "Du bist ein Prompt-Engineer. Der Nutzer gibt dir eine kurze Aufgabenbeschreibung "
@@ -134,7 +135,7 @@ class MainAgent:
         parts.append(build_classify_prompt(
             active_agents=active_agents_str,
             open_tasks=open_tasks_str,
-            workspace=getattr(self, '_active_workspace', ''),
+            workspace=get_workspace_context(),
         ))
         system = "\n\n".join(parts)
         llm = self.llm_router.get_client("classify") if self.llm_router else self.llm
