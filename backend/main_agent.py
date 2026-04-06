@@ -19,6 +19,7 @@ from backend.memory.fact_memory import FactMemory, extract_and_store_facts
 from backend.llm_router import LLMRouter
 from backend.security.input_guard import InputGuard
 from backend.prompts.classify import build_classify_prompt
+from backend.intent_prefilter import IntentPrefilter, PrefilterResult
 
 _ENRICH_PROMPT_SYSTEM = (
     "Du bist ein Prompt-Engineer. Der Nutzer gibt dir eine kurze Aufgabenbeschreibung "
@@ -74,6 +75,7 @@ class MainAgent:
         self.config_service = config_service
         self.allowlist = allowlist
         self._input_guard = InputGuard()
+        self._prefilter = IntentPrefilter()
         self.active_agents: dict[str, dict] = {}
         self._pending_tasks: dict[int, asyncio.Task] = {}
         self._agent_pool = load_agent_pool()
@@ -421,6 +423,24 @@ class MainAgent:
 
         return f"Schedule '{name}' erstellt ({schedule}, {agent_type})"
 
+    async def _task_create_from_natural(self, text: str, chat_id: str) -> str:
+        """Create a DB task from natural language."""
+        response = await self.llm.chat(
+            system_prompt=(
+                "Extrahiere aus dieser Nachricht einen kurzen Task-Titel (max 10 Wörter). "
+                "Antworte NUR mit dem Titel, kein JSON, kein Markdown."
+            ),
+            messages=[{"role": "user", "content": text}],
+            temperature=0.1,
+        )
+        title = response.strip()[:200] or "Neuer Task"
+        task_id = await self.db.create_task(
+            title=title,
+            description=text,
+            agent_type="researcher",
+        )
+        return f"Task #{task_id} erstellt: {title}"
+
     async def _schedule_edit(self, args: str, chat_id: str) -> str:
         if not self.scheduler:
             return "Scheduler nicht aktiv."
@@ -654,6 +674,22 @@ class MainAgent:
                 )
             except Exception:
                 pass
+
+        # Intent-Prefilter (vor LLM-Call — 0 Token)
+        prefilter_result = self._prefilter.check(text)
+        if prefilter_result == PrefilterResult.CREATE_SCHEDULE:
+            response = await self._schedule_create(text, chat_id)
+            if self.telegram and chat_id:
+                for chunk in self._split_telegram_message(response):
+                    await self.telegram.send_message(chunk, chat_id=chat_id or None)
+            if self.ws_callback:
+                await self.ws_callback({"type": "reply", "text": response})
+            return
+        if prefilter_result == PrefilterResult.CREATE_TASK:
+            response = await self._task_create_from_natural(text, chat_id)
+            if self.telegram and chat_id:
+                await self.telegram.send_message(response[:4000], chat_id=chat_id or None)
+            return
 
         await self.db.append_chat(chat_id or "default", "user", text)
 
