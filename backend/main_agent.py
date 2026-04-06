@@ -141,9 +141,11 @@ class MainAgent:
         llm = self.llm_router.get_client("classify") if self.llm_router else self.llm
         history = await self.db.get_chat_history(chat_id or "default", limit=10)
         messages = history + [{"role": "user", "content": message}]
+        _model = llm.model_light if hasattr(llm, "model_light") else None
         response = await llm.chat(
             system_prompt=system,
             messages=messages,
+            model=_model,
             temperature=0.1,
         )
         try:
@@ -161,6 +163,7 @@ class MainAgent:
                         {"role": "assistant", "content": response},
                         {"role": "user", "content": "Antworte NUR mit validem JSON. Kein Text davor oder danach."},
                     ],
+                    model=_model,
                     temperature=0.0,
                 )
                 text2 = response2.strip()

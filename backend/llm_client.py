@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from ollama import chat as ollama_chat
+import ollama as _ollama_lib
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 
 
@@ -53,6 +53,10 @@ class LLMClient:
             self.num_ctx = settings.ollama_num_ctx
             self.num_ctx_extended = settings.ollama_num_ctx_extended
 
+    def _ollama_chat(self, **kwargs):
+        """Call ollama chat using the configured host."""
+        return _ollama_lib.Client(host=self.host).chat(**kwargs)
+
     def _build_options(self, temperature: float | None = None,
                        num_ctx: int | None = None) -> dict:
         """Build Ollama options. Note: num_predict removed —
@@ -91,7 +95,7 @@ class LLMClient:
         if format_schema is not None:
             kwargs["format"] = "json"
 
-        response = await asyncio.to_thread(ollama_chat, **kwargs)
+        response = await asyncio.to_thread(self._ollama_chat, **kwargs)
         return strip_thinking(_get_content(response))
 
     async def chat_with_tools(
@@ -109,7 +113,7 @@ class LLMClient:
         opts = self._build_options(temperature=0.1)
         if opts:
             kwargs["options"] = opts
-        response = await asyncio.to_thread(ollama_chat, **kwargs)
+        response = await asyncio.to_thread(self._ollama_chat, **kwargs)
         msg = _get_message(response)
         if msg.get("content"):
             msg["content"] = strip_thinking(msg["content"])
@@ -181,5 +185,5 @@ class LLMClient:
         opts = self._build_options(temperature=0.2)
         if opts:
             kwargs["options"] = opts
-        response = await asyncio.to_thread(ollama_chat, **kwargs)
+        response = await asyncio.to_thread(self._ollama_chat, **kwargs)
         return _get_content(response)
