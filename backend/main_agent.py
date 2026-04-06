@@ -21,6 +21,7 @@ from backend.security.input_guard import InputGuard
 from backend.prompts.classify import build_classify_prompt
 from backend.intent_prefilter import IntentPrefilter, PrefilterResult
 from backend.prompt_consolidator import PromptConsolidator
+from backend.output_router import OutputRouter, OutputDestination
 
 _ENRICH_PROMPT_SYSTEM = (
     "Du bist ein Prompt-Engineer. Der Nutzer gibt dir eine kurze Aufgabenbeschreibung "
@@ -78,6 +79,8 @@ class MainAgent:
         self._input_guard = InputGuard()
         self._prefilter = IntentPrefilter()
         self._consolidator = PromptConsolidator()
+        llm_for_router = llm_router.get_client("classify") if llm_router else llm
+        self._output_router = OutputRouter(llm=llm_for_router)
         self.active_agents: dict[str, dict] = {}
         self._pending_tasks: dict[int, asyncio.Task] = {}
         self._agent_pool = load_agent_pool()
@@ -1102,8 +1105,16 @@ class MainAgent:
                         "content": reply_text, "chat_id": chat_id or "default",
                     })
 
-                # 5. Write result to Obsidian if enabled
-                if self._obsidian_enabled():
+                # 5. Route result via Output-Router (Obsidian / Task / Reply)
+                dest = await self._output_router.resolve(
+                    original_prompt=original_text,
+                    intent_type=classification.get("type", "content"),
+                    result_type=result_type,
+                    conversation_history=await self.db.get_chat_history(chat_id or "default", limit=5),
+                )
+
+                if dest == OutputDestination.OBSIDIAN and self._obsidian_enabled():
+                    folder = self._output_router.get_obsidian_folder(result_type)
                     try:
                         await asyncio.to_thread(
                             self.obsidian_writer.write_result,
@@ -1111,23 +1122,40 @@ class MainAgent:
                         )
                     except Exception as e:
                         print(f"Obsidian write failed: {e}")
+                    obsidian_note = f" in Obsidian ({folder})" if self._obsidian_enabled() else ""
+                elif dest == OutputDestination.TASK:
+                    new_task_id = await self.db.create_task(
+                        TaskData(title=title, description=result[:2000], status=TaskStatus.OPEN)
+                    )
+                    reply_text = f"Task #{new_task_id} erstellt: {title}"
+                    await self.db.append_chat(chat_id or "default", "assistant", reply_text)
+                    if self.ws_callback:
+                        await self.ws_callback({
+                            "type": "chat_reply", "role": "assistant",
+                            "content": reply_text, "chat_id": chat_id or "default",
+                        })
+                    obsidian_note = ""
+                else:
+                    # REPLY — result already broadcast above as reply_text
+                    obsidian_note = ""
 
-                # 6. Send short summary to Telegram, full report in Obsidian
+                # 6. Send short summary to Telegram
                 if self.telegram:
                     # Extract first paragraph as summary (max 300 chars)
                     paragraphs = [p.strip() for p in result.split("\n\n") if p.strip() and not p.strip().startswith("#")]
                     summary = paragraphs[0][:300] if paragraphs else result[:300]
                     if len(summary) < len(paragraphs[0] if paragraphs else result):
                         summary += "..."
+                    obsidian_suffix = f"\n\n📁 Vollständiger Bericht in Obsidian" if dest == OutputDestination.OBSIDIAN and self._obsidian_enabled() else ""
                     if hasattr(self.telegram, 'send_message_with_buttons'):
                         await self.telegram.send_message_with_buttons(
-                            f"✅ Fertig: *{title}*\n\n{summary}\n\n📁 Vollständiger Bericht in Obsidian",
+                            f"✅ Fertig: *{title}*\n\n{summary}{obsidian_suffix}",
                             [[{"text": "📋 Details in Telegram", "callback_data": f"/task {task_id}"}]],
                             chat_id=chat_id or None,
                         )
                     else:
                         await self.telegram.send_message(
-                            f"✅ Fertig: *{title}*\n\n{summary}\n\n📁 Vollständiger Bericht in Obsidian",
+                            f"✅ Fertig: *{title}*\n\n{summary}{obsidian_suffix}",
                             chat_id=chat_id or None,
                         )
 
