@@ -43,3 +43,28 @@ def test_consolidator_builds_single_prompt():
     assert "Guide" in result
     # Single prompt, not a list
     assert "\n1." not in result or result.count("\n1.") == 0
+
+
+def test_consolidate_multi_point_returns_consolidated():
+    consolidator = PromptConsolidator()
+    text = "1. Recherchiere KI-Trends 2026\n2. Erstelle daraus einen Guide"
+    result, was_consolidated = consolidator.consolidate(text)
+    assert was_consolidated is True
+    assert "KI-Trends" in result
+    assert "Guide" in result
+
+
+def test_consolidate_plain_text_unchanged():
+    consolidator = PromptConsolidator()
+    text = "Wie geht es dir?"
+    result, was_consolidated = consolidator.consolidate(text)
+    assert was_consolidated is False
+    assert result == text
+
+
+def test_consolidate_single_item_unchanged():
+    consolidator = PromptConsolidator()
+    text = "1. Recherchiere KI-Trends"
+    result, was_consolidated = consolidator.consolidate(text)
+    assert was_consolidated is False
+    assert result == text
