@@ -8,7 +8,6 @@ from enum import Enum
 class PrefilterResult(str, Enum):
     CREATE_SCHEDULE = "create_schedule"
     CREATE_TASK = "create_task"
-    ROUTE_OBSIDIAN = "route_obsidian"
     NONE = "none"
 
 
@@ -65,10 +64,10 @@ class IntentPrefilter:
         msg_lower = message.lower()
 
         for excl in _SCHEDULE_EXCLUSIONS:
-            if excl.search(message):
+            if excl.search(msg_lower):
                 return PrefilterResult.NONE
 
-        for keyword, pat in _TASK_KW_PATTERNS.items():
+        for pat in _TASK_KW_PATTERNS.values():
             if pat.search(message):
                 return PrefilterResult.CREATE_TASK
 
