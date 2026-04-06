@@ -900,3 +900,61 @@ async def get_system_metrics():
     if _system_monitor is None:
         return {"error": "SystemMonitor not initialized"}
     return _system_monitor.get_metrics()
+
+
+# ── Update ────────────────────────────────────────────────────────────
+
+@router.post("/update")
+async def update_server():
+    """Run git pull + pip install and stream output via SSE. No restart is triggered."""
+    import json as _json
+    from pathlib import Path as _Path
+    from fastapi.responses import StreamingResponse
+
+    project_root = _Path(__file__).parent.parent
+
+    async def stream_update():
+        # Step 1: git pull
+        yield f"data: {_json.dumps({'line': '$ git pull'})}\n\n"
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "git", "pull",
+                cwd=str(project_root),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+            async for raw_line in proc.stdout:
+                line = raw_line.decode("utf-8", errors="replace").rstrip()
+                yield f"data: {_json.dumps({'line': line})}\n\n"
+            await proc.wait()
+            if proc.returncode != 0:
+                yield f"data: {_json.dumps({'status': 'error', 'line': f'git pull fehlgeschlagen (exit {proc.returncode})'})}\n\n"
+                return
+        except Exception as e:
+            yield f"data: {_json.dumps({'status': 'error', 'line': str(e)})}\n\n"
+            return
+
+        # Step 2: pip install
+        yield f"data: {_json.dumps({'line': '$ pip install -r requirements.txt'})}\n\n"
+        try:
+            import sys as _sys
+            proc = await asyncio.create_subprocess_exec(
+                _sys.executable, "-m", "pip", "install", "-r", "requirements.txt",
+                cwd=str(project_root),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+            async for raw_line in proc.stdout:
+                line = raw_line.decode("utf-8", errors="replace").rstrip()
+                yield f"data: {_json.dumps({'line': line})}\n\n"
+            await proc.wait()
+            if proc.returncode != 0:
+                yield f"data: {_json.dumps({'status': 'error', 'line': f'pip install fehlgeschlagen (exit {proc.returncode})'})}\n\n"
+                return
+        except Exception as e:
+            yield f"data: {_json.dumps({'status': 'error', 'line': str(e)})}\n\n"
+            return
+
+        yield f"data: {_json.dumps({'status': 'done'})}\n\n"
+
+    return StreamingResponse(stream_update(), media_type="text/event-stream")
