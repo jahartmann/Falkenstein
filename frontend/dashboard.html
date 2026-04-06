@@ -63,6 +63,11 @@
             <rect x="2" y="6" width="16" height="10" rx="1.5"/><path d="M6 6V4a4 4 0 018 0v2"/><path d="M6 11h2l1-2 2 4 1-2h2"/>
           </svg>
         </button>
+        <button class="sidebar-btn" data-section="system" title="System">
+          <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>
+          </svg>
+        </button>
         <button class="sidebar-btn" data-section="files" title="Dateien">
           <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
             <path d="M3 4h5l2 2h7a1 1 0 011 1v9a1 1 0 01-1 1H3a1 1 0 01-1-1V5a1 1 0 011-1z"/>
@@ -191,7 +196,10 @@
       <section class="section" id="section-config">
         <div class="section-header">
           <h1>Konfiguration</h1>
-          <button class="btn" style="background:var(--red);color:#fff" onclick="restartServer()">Server neustarten</button>
+          <div style="display:flex;gap:8px">
+            <button class="btn" onclick="runUpdate()">⬆ Update & Neustart</button>
+            <button class="btn" style="background:var(--red);color:#fff" onclick="restartServer()">Server neustarten</button>
+          </div>
         </div>
         <div style="background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);padding:10px 14px;margin-bottom:16px;font-size:12px;color:var(--text-muted)">
           Änderungen an Server-Einstellungen (Token, Port) werden in die <strong>.env</strong> geschrieben und erfordern einen <strong>Neustart</strong>.
@@ -333,6 +341,20 @@
         <div class="panel" style="margin-top:16px">
           <h2>Token Budget</h2>
           <div id="health-budget"></div>
+        </div>
+      </section>
+
+      <!-- System Section -->
+      <section class="section" id="section-system">
+        <div class="section-header">
+          <h1>System</h1>
+          <button class="btn" onclick="loadSystem()">Aktualisieren</button>
+        </div>
+        <div id="system-metrics-grid" style="display:grid;grid-template-columns:repeat(2,1fr);gap:16px;margin-top:8px">
+          <div class="panel" id="system-card-cpu"></div>
+          <div class="panel" id="system-card-ram"></div>
+          <div class="panel" id="system-card-gpu"></div>
+          <div class="panel" id="system-card-temp"></div>
         </div>
       </section>
 

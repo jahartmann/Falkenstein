@@ -90,6 +90,16 @@ document.querySelectorAll('.sidebar-btn[data-section]').forEach(btn => {
     else if (s === 'toollog') loadToolLog();
     else if (s === 'obsidian') loadObsidian();
     else if (s === 'health') loadHealth();
+    else if (s === 'system') {
+      loadSystem();
+      if (!window._systemInterval) {
+        window._systemInterval = setInterval(() => {
+          if (document.getElementById('section-system')?.classList.contains('active')) {
+            loadSystem();
+          }
+        }, 5000);
+      }
+    }
     else if (s === 'files') loadFiles('');
   });
 });
@@ -1160,6 +1170,7 @@ const COMMANDS = [
   { name: 'Tool Log', action: () => navTo('toollog'), section: 'toollog' },
   { name: 'Obsidian', action: () => navTo('obsidian'), section: 'obsidian' },
   { name: 'System Health', action: () => navTo('health'), section: 'health' },
+  { name: 'System Monitor', action: () => navTo('system'), section: 'system' },
   { name: 'Dateien', action: () => navTo('files'), section: 'files' },
   { name: 'Konfiguration', action: () => navTo('config'), section: 'config' },
   { name: 'Büro öffnen', action: () => window.open('/office', '_blank'), section: '' },
@@ -1522,6 +1533,161 @@ async function clearWorkspace() {
     headers: token ? { 'Authorization': 'Bearer ' + token } : {},
   });
   document.getElementById('workspace-badge')?.remove();
+}
+
+// ── System Section ────────────────────────────────────────────────────
+
+function renderSystemCard(id, title, mainValue, subValue, pct, color) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const barColor = color || (pct > 80 ? 'var(--red)' : pct > 60 ? '#f0a500' : 'var(--green)');
+  el.innerHTML = `
+    <h2 style="margin:0 0 12px">${title}</h2>
+    <div style="font-size:2em;font-weight:700;line-height:1">${mainValue}</div>
+    ${subValue ? `<div style="font-size:0.85em;color:var(--text-muted);margin-top:4px">${subValue}</div>` : ''}
+    ${pct != null ? `
+      <div style="margin-top:12px;height:8px;background:var(--border);border-radius:4px">
+        <div style="width:${Math.min(pct,100)}%;height:100%;background:${barColor};border-radius:4px;transition:width 0.5s"></div>
+      </div>
+    ` : ''}
+  `;
+}
+
+async function loadSystem() {
+  try {
+    const m = await api('/system/metrics');
+    const na = '—';
+
+    // CPU
+    renderSystemCard(
+      'system-card-cpu', 'CPU',
+      m.cpu_percent != null ? `${m.cpu_percent}%` : na,
+      m.cpu_watts != null ? `${m.cpu_watts} W` : null,
+      m.cpu_percent,
+    );
+
+    // RAM
+    renderSystemCard(
+      'system-card-ram', 'RAM',
+      m.ram_percent != null ? `${m.ram_percent}%` : na,
+      m.ram_used_gb != null ? `${m.ram_used_gb} / ${m.ram_total_gb} GB` : null,
+      m.ram_percent,
+    );
+
+    // GPU
+    renderSystemCard(
+      'system-card-gpu', 'GPU',
+      m.gpu_percent != null ? `${m.gpu_percent}%` : na,
+      m.gpu_percent == null ? 'powermetrics nicht verfügbar' : null,
+      m.gpu_percent,
+    );
+
+    // Temp
+    const tempColor = m.cpu_temp_c == null ? null
+      : m.cpu_temp_c >= 85 ? 'var(--red)'
+      : m.cpu_temp_c >= 70 ? '#f0a500'
+      : 'var(--green)';
+    renderSystemCard(
+      'system-card-temp', 'Temperatur',
+      m.cpu_temp_c != null ? `${m.cpu_temp_c}°C` : na,
+      m.disk_percent != null ? `Disk: ${m.disk_percent}%` : null,
+      null,
+      tempColor,
+    );
+    // Color the temp value
+    const tempEl = document.querySelector('#system-card-temp div[style*="font-size:2em"]');
+    if (tempEl && tempColor) tempEl.style.color = tempColor;
+
+  } catch (e) {
+    console.error('System metrics error:', e);
+  }
+}
+
+// ── Update Workflow ───────────────────────────────────────────────────
+
+async function runUpdate() {
+  if (!confirm('Server wird gestoppt, Code aktualisiert und neu gestartet.\n\nFortfahren?')) return;
+
+  // Inject modal
+  document.body.insertAdjacentHTML('beforeend', `
+    <div id="update-modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9999;display:flex;align-items:center;justify-content:center">
+      <div style="background:#1a1a1a;color:#e0e0e0;border-radius:8px;padding:24px;width:600px;max-width:90vw;max-height:80vh;display:flex;flex-direction:column;gap:12px">
+        <h3 style="margin:0;color:#fff">⬆ Update & Neustart</h3>
+        <div id="update-output" style="flex:1;overflow-y:auto;font-family:monospace;font-size:12px;line-height:1.6;max-height:400px;background:#0d0d0d;padding:12px;border-radius:4px;white-space:pre-wrap"></div>
+        <div id="update-status" style="font-size:13px;color:#aaa"></div>
+        <button id="update-close-btn" style="display:none;align-self:flex-end" class="btn" onclick="document.getElementById('update-modal').remove()">Schließen</button>
+      </div>
+    </div>
+  `);
+
+  const output = document.getElementById('update-output');
+  const status = document.getElementById('update-status');
+  const closeBtn = document.getElementById('update-close-btn');
+
+  function appendLine(text, color) {
+    const line = document.createElement('div');
+    line.textContent = text;
+    if (color) line.style.color = color;
+    output.appendChild(line);
+    // Keep max 200 lines
+    while (output.children.length > 200) output.removeChild(output.firstChild);
+    output.scrollTop = output.scrollHeight;
+  }
+
+  const token = localStorage.getItem('falkenstein_token') || '';
+  const headers = { 'Content-Type': 'application/json' };
+  if (token) headers['Authorization'] = 'Bearer ' + token;
+
+  try {
+    const resp = await fetch('/api/admin/update', { method: 'POST', headers });
+    if (!resp.body) throw new Error('Kein Response-Body');
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const text = decoder.decode(value);
+      for (const line of text.split('\n')) {
+        if (!line.startsWith('data: ')) continue;
+        try {
+          const data = JSON.parse(line.slice(6));
+          if (data.line !== undefined) {
+            appendLine(data.line);
+          }
+          if (data.status === 'done') {
+            appendLine('');
+            appendLine('✅ Update erfolgreich — Neustart in 3s...', '#4caf50');
+            status.textContent = 'Neustart wird durchgeführt...';
+            let countdown = 3;
+            const timer = setInterval(async () => {
+              countdown--;
+              status.textContent = `Neustart in ${countdown}s...`;
+              if (countdown <= 0) {
+                clearInterval(timer);
+                const rtoken = localStorage.getItem('falkenstein_token') || '';
+                await fetch('/api/admin/restart', {
+                  method: 'POST',
+                  headers: rtoken ? { 'Authorization': 'Bearer ' + rtoken } : {},
+                }).catch(() => {});
+              }
+            }, 1000);
+            return;
+          }
+          if (data.status === 'error') {
+            appendLine('');
+            appendLine('❌ Fehler — kein Neustart durchgeführt.', 'var(--red)');
+            if (data.line) appendLine(data.line, 'var(--red)');
+            closeBtn.style.display = 'block';
+            return;
+          }
+        } catch {}
+      }
+    }
+  } catch (err) {
+    appendLine('❌ Verbindungsfehler: ' + err.message, 'var(--red)');
+    closeBtn.style.display = 'block';
+  }
 }
 
 // Init
