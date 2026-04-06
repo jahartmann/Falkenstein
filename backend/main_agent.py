@@ -20,6 +20,7 @@ from backend.llm_router import LLMRouter
 from backend.security.input_guard import InputGuard
 from backend.prompts.classify import build_classify_prompt
 from backend.intent_prefilter import IntentPrefilter, PrefilterResult
+from backend.prompt_consolidator import PromptConsolidator
 
 _ENRICH_PROMPT_SYSTEM = (
     "Du bist ein Prompt-Engineer. Der Nutzer gibt dir eine kurze Aufgabenbeschreibung "
@@ -76,6 +77,7 @@ class MainAgent:
         self.allowlist = allowlist
         self._input_guard = InputGuard()
         self._prefilter = IntentPrefilter()
+        self._consolidator = PromptConsolidator()
         self.active_agents: dict[str, dict] = {}
         self._pending_tasks: dict[int, asyncio.Task] = {}
         self._agent_pool = load_agent_pool()
@@ -690,6 +692,15 @@ class MainAgent:
             if self.telegram and chat_id:
                 await self.telegram.send_message(response[:4000], chat_id=chat_id or None)
             return
+
+        # Prompt-Konsolidierung: nummerierte Listen -> ein kohärenter Prompt
+        text, was_consolidated = self._consolidator.consolidate(text)
+        # Optional: User informieren
+        if was_consolidated and self.telegram and chat_id:
+            await self.telegram.send_message(
+                f"_Verstanden als: {text[:200]}..._" if len(text) > 200 else f"_Verstanden als: {text}_",
+                chat_id=chat_id or None,
+            )
 
         await self.db.append_chat(chat_id or "default", "user", text)
 
