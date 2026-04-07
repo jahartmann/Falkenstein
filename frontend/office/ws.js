@@ -54,6 +54,25 @@ export class OfficeWS {
         setTimeout(() => this.am.removeAgent(msg.agent_id), 3000);
         break;
 
+      // CrewAI EventBus events
+      case 'agent_spawn':
+        this.am.onAgentSpawn(msg.data.crew, msg.data.crew_id, msg.data.task || '');
+        break;
+
+      case 'tool_use':
+        this.am.onToolUse(msg.data.agent, msg.data.tool, msg.data.animation, msg.data.crew_id);
+        break;
+
+      case 'agent_done_crew':
+        this.bm.showBubble(msg.data.crew_id, '\u2705 Fertig!');
+        this.am.onAgentDone(msg.data.crew, msg.data.crew_id);
+        break;
+
+      case 'agent_error_crew':
+        this.bm.showBubble(msg.data.crew_id, '\u274C ' + (msg.data.error || 'Fehler!'));
+        this.am.onAgentError(msg.data.crew, msg.data.crew_id, msg.data.error);
+        break;
+
       case 'agent_progress':
         this.am.updateAgentStatus(msg.agent_id, msg.label || msg.tool || '');
         this.bm.showBubble(msg.agent_id, msg.label || `\uD83D\uDD27 ${msg.tool || '...'}`);
