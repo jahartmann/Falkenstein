@@ -44,33 +44,36 @@ export class OfficeWS {
         this.bm.showBubble(msg.agent_id, msg.task || 'Gestartet...');
         break;
 
-      case 'agent_done':
-        this.bm.showBubble(msg.agent_id, '\u2705 Fertig!');
-        setTimeout(() => this.am.removeAgent(msg.agent_id), 3000);
-        break;
-
-      case 'agent_error':
-        this.bm.showBubble(msg.agent_id, '\u274C Fehler!');
-        setTimeout(() => this.am.removeAgent(msg.agent_id), 3000);
-        break;
-
-      // CrewAI EventBus events
+      // CrewAI EventBus events (flat format — no data wrapper)
       case 'agent_spawn':
-        this.am.onAgentSpawn(msg.data.crew, msg.data.crew_id, msg.data.task || '');
+        this.am.onAgentSpawn(msg.crew, msg.crew_id, msg.task || '');
+        this.bm.showBubble(msg.crew_id, msg.task || 'Gestartet...');
         break;
 
       case 'tool_use':
-        this.am.onToolUse(msg.data.agent, msg.data.tool, msg.data.animation, msg.data.crew_id);
+        this.am.onToolUse(msg.agent, msg.tool, msg.animation, msg.crew_id);
         break;
 
-      case 'agent_done_crew':
-        this.bm.showBubble(msg.data.crew_id, '\u2705 Fertig!');
-        this.am.onAgentDone(msg.data.crew, msg.data.crew_id);
+      // Legacy agent_done/agent_error (with agent_id) handled above.
+      // CrewAI crew events use crew_id — check for it:
+      case 'agent_done':
+        if (msg.crew_id) {
+          this.bm.showBubble(msg.crew_id, '\u2705 Fertig!');
+          this.am.onAgentDone(msg.crew, msg.crew_id);
+        } else {
+          this.bm.showBubble(msg.agent_id, '\u2705 Fertig!');
+          setTimeout(() => this.am.removeAgent(msg.agent_id), 3000);
+        }
         break;
 
-      case 'agent_error_crew':
-        this.bm.showBubble(msg.data.crew_id, '\u274C ' + (msg.data.error || 'Fehler!'));
-        this.am.onAgentError(msg.data.crew, msg.data.crew_id, msg.data.error);
+      case 'agent_error':
+        if (msg.crew_id) {
+          this.bm.showBubble(msg.crew_id, '\u274C ' + (msg.error || 'Fehler!'));
+          this.am.onAgentError(msg.crew, msg.crew_id, msg.error);
+        } else {
+          this.bm.showBubble(msg.agent_id, '\u274C Fehler!');
+          setTimeout(() => this.am.removeAgent(msg.agent_id), 3000);
+        }
         break;
 
       case 'agent_progress':
