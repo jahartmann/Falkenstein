@@ -395,35 +395,33 @@ async function aiCreateSchedule() {
 
 // Config
 const CONFIG_CATEGORIES = {
-  'Server': ['api_token','telegram_bot_token','telegram_chat_id','telegram_allowed_chat_ids','port'],
-  'Modelle': ['ollama_host','ollama_model_light','ollama_model_heavy','ollama_model','ollama_num_ctx','ollama_num_ctx_extended','llm_max_retries'],
-  'LLM Routing': ['llm_provider_classify','llm_provider_action','llm_provider_content','llm_provider_scheduled','cli_provider','cli_daily_token_budget'],
-  'Pfade': ['obsidian_vault_path','workspace_path'],
+  'Ollama': ['ollama_host','ollama_model_light','ollama_model_heavy','ollama_model','ollama_keep_alive','ollama_num_ctx','ollama_num_ctx_extended','llm_max_retries'],
+  'API Schlüssel': ['serper_api_key','brave_api_key'],
+  'Telegram': ['telegram_bot_token','telegram_chat_id','telegram_allowed_chat_ids'],
+  'Obsidian': ['obsidian_vault_path','obsidian_enabled','obsidian_auto_knowledge'],
   'Persönlichkeit': ['soul_prompt'],
-  'API Keys': ['brave_api_key'],
-  'Allgemein': ['obsidian_enabled','obsidian_auto_knowledge'],
+  'Premium': ['cli_provider','cli_daily_token_budget'],
+  'Server': ['api_token','port','workspace_path'],
 };
 const CONFIG_LABELS = {
   'ollama_host': 'Ollama Server',
-  'ollama_model_light': 'Kleines Modell (Routing, Chat, Klassifizierung)',
-  'ollama_model_heavy': 'Großes Modell (Recherche, Code, Tasks)',
-  'ollama_model': 'Fallback-Modell (wenn kein Light/Heavy gesetzt)',
-  'ollama_num_ctx': 'Kontext-Fenster (Standard)',
+  'ollama_model_light': 'Schnelles Modell (Classify, Quick-Reply)',
+  'ollama_model_heavy': 'Starkes Modell (Crews, Tool-Calling)',
+  'ollama_model': 'Fallback-Modell',
+  'ollama_keep_alive': 'Modell im RAM halten',
+  'ollama_num_ctx': 'Kontext-Fenster',
   'ollama_num_ctx_extended': 'Kontext-Fenster (Erweitert)',
-  'llm_max_retries': 'Max. Wiederholungsversuche',
-  'llm_provider_classify': 'Klassifizierung',
-  'llm_provider_action': 'Aktionen (Ops, Shell)',
-  'llm_provider_content': 'Inhalte (Recherche, Guides)',
-  'llm_provider_scheduled': 'Geplante Tasks',
-  'cli_provider': 'Premium CLI (claude / gemini)',
-  'cli_daily_token_budget': 'Tages-Token-Budget (CLI)',
+  'llm_max_retries': 'Max. Wiederholungen',
+  'cli_provider': 'Premium-Anbieter (claude / gemini)',
+  'cli_daily_token_budget': 'Tages-Token-Budget',
   'api_token': 'API Token',
-  'telegram_bot_token': 'Telegram Bot Token',
-  'telegram_chat_id': 'Telegram Chat ID',
+  'telegram_bot_token': 'Bot Token',
+  'telegram_chat_id': 'Chat ID',
   'telegram_allowed_chat_ids': 'Erlaubte Chat IDs',
-  'port': 'Port',
-  'obsidian_vault_path': 'Obsidian Vault Pfad',
+  'port': 'Port (Neustart nötig)',
+  'obsidian_vault_path': 'Vault Pfad',
   'workspace_path': 'Workspace Pfad',
+  'serper_api_key': 'Serper API Key (Web-Suche)',
   'brave_api_key': 'Brave API Key',
   'obsidian_enabled': 'Obsidian aktiviert',
   'obsidian_auto_knowledge': 'Auto-Wissensbase',
@@ -431,7 +429,7 @@ const CONFIG_LABELS = {
 };
 const MODEL_SELECT_KEYS = new Set(['ollama_model_light', 'ollama_model_heavy', 'ollama_model']);
 const TEXTAREA_KEYS = new Set(['soul_prompt']);
-const PASSWORD_KEYS = new Set(['brave_api_key', 'api_token', 'telegram_bot_token']);
+const PASSWORD_KEYS = new Set(['brave_api_key', 'serper_api_key', 'api_token', 'telegram_bot_token']);
 const PATH_KEYS = new Set(['obsidian_vault_path', 'workspace_path']);
 
 async function loadConfig() {
@@ -456,8 +454,13 @@ async function loadConfig() {
     for (const [cat, entries] of Object.entries(groups)) {
       const keys = Object.keys(entries);
       if (keys.length === 0) continue;
-      const catDesc = cat === 'Modelle'
-        ? '<p style="font-size:12px;color:var(--text-muted);margin:0 0 12px">Kleines Modell für schnelle Antworten und Routing — Großes Modell für Recherchen, Code und komplexe Tasks.</p>'
+      const catDescs = {
+        'Ollama': 'Schnelles Modell (e4b) für Classify und Quick-Reply — Starkes Modell (26b) für Crews und Tool-Calling.',
+        'API Schlüssel': 'Serper = Web-Suche für CrewAI Agents. Kostenlos auf serper.dev (2.500 Suchen/Monat). Brave = Alternative Suche.',
+        'Premium': 'Für Tasks die lokale Modelle überfordern. Nutzt Claude oder Gemini CLI.',
+      };
+      const catDesc = catDescs[cat]
+        ? `<p style="font-size:12px;color:var(--text-muted);margin:0 0 12px">${catDescs[cat]}</p>`
         : '';
       html += `<div class="config-group"><h3>${esc(cat)}</h3>${catDesc}`;
       keys.forEach(key => {

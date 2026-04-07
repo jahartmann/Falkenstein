@@ -63,11 +63,12 @@ class Settings(BaseSettings):
 # Fields that can be updated at runtime without server restart
 HOT_RELOAD_FIELDS: set[str] = {
     "ollama_host", "ollama_model", "ollama_model_light", "ollama_model_heavy",
-    "ollama_num_ctx", "ollama_num_ctx_extended",
+    "ollama_num_ctx", "ollama_num_ctx_extended", "ollama_keep_alive",
     "telegram_bot_token", "telegram_chat_id",
     "cli_provider", "cli_daily_token_budget",
     "obsidian_vault_path",
     "llm_max_retries",
+    "serper_api_key", "brave_api_key",
 }
 
 settings = Settings()

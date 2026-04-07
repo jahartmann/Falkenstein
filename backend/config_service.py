@@ -31,6 +31,8 @@ _ENV_KEY_MAP = {
     "cli_daily_token_budget": "CLI_DAILY_TOKEN_BUDGET",
     "cli_provider": "CLI_PROVIDER",
     "brave_api_key": "BRAVE_API_KEY",
+    "serper_api_key": "SERPER_API_KEY",
+    "ollama_keep_alive": "OLLAMA_KEEP_ALIVE",
 }
 
 
@@ -65,6 +67,9 @@ CONFIG_DEFAULTS: list[dict] = [
     {"key": "cli_daily_token_budget", "value": _get_env("cli_daily_token_budget", "100000"), "category": "llm", "description": "Daily CLI token budget"},
     # API Keys
     {"key": "brave_api_key", "value": _get_env("brave_api_key"), "category": "api_keys", "description": "Brave Search API key"},
+    {"key": "serper_api_key", "value": _get_env("serper_api_key"), "category": "api_keys", "description": "Serper.dev API key (Web-Search fuer CrewAI)"},
+    # Ollama Performance
+    {"key": "ollama_keep_alive", "value": _get_env("ollama_keep_alive", "30m"), "category": "llm", "description": "Modell im RAM halten (z.B. 30m, 1h, 0 = sofort entladen)"},
     # General
     {"key": "soul_prompt", "value": "", "category": "personality", "description": "Falki system prompt / personality"},
     {"key": "obsidian_enabled", "value": "true", "category": "general", "description": "Write results to Obsidian"},
