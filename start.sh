@@ -29,9 +29,21 @@ if [ -z "$PYTHON_BIN" ]; then
 fi
 
 if [ -z "$PYTHON_BIN" ]; then
-    echo -e "${RED}Python 3.11-3.13 nicht gefunden. CrewAI ist nicht kompatibel mit Python 3.14+${NC}"
-    echo -e "${YELLOW}Installiere mit: brew install python@3.12 (macOS) oder apt install python3.12 (Linux)${NC}"
-    exit 1
+    echo -e "${YELLOW}Python 3.11-3.13 nicht gefunden. Versuche automatische Installation...${NC}"
+    if command -v brew &> /dev/null; then
+        echo -e "${YELLOW}Installiere Python 3.12 via Homebrew...${NC}"
+        brew install python@3.12
+        PYTHON_BIN="$(brew --prefix python@3.12)/bin/python3.12"
+    elif command -v apt &> /dev/null; then
+        echo -e "${YELLOW}Installiere Python 3.12 via apt...${NC}"
+        sudo apt update && sudo apt install -y python3.12 python3.12-venv
+        PYTHON_BIN="python3.12"
+    fi
+    if [ -z "$PYTHON_BIN" ] || ! command -v "$PYTHON_BIN" &> /dev/null; then
+        echo -e "${RED}Python 3.12 konnte nicht installiert werden.${NC}"
+        echo -e "${RED}Bitte manuell installieren: brew install python@3.12${NC}"
+        exit 1
+    fi
 fi
 
 PY_VERSION=$($PYTHON_BIN -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
