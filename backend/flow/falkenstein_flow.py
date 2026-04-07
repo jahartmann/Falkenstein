@@ -53,8 +53,8 @@ class FalkensteinFlow:
         # 3. Route
         route = self.rule_engine.route(message)
         if route.action == "quick_reply":
-            vault_ctx = self.vault_index.as_context() if self.vault_index else ""
-            return await self.ollama.quick_reply(message, context=vault_ctx)
+            # No vault context for quick replies — keep it fast
+            return await self.ollama.quick_reply(message, context="Antworte kurz und direkt auf Deutsch.")
         if route.action == "crew" and route.crew_type:
             crew_type = route.crew_type
         else:
