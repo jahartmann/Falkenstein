@@ -25,29 +25,20 @@ from backend.admin_api import router as admin_router
 from backend.workspace_api import router as workspace_router
 from backend import admin_api
 from backend.database import Database
-from backend.llm_client import LLMClient
 from backend.ws_manager import WSManager
 from backend.telegram_bot import TelegramBot
-from backend.main_agent import MainAgent
 from backend.obsidian_writer import ObsidianWriter
 from backend.smart_scheduler import SmartScheduler
 from backend.memory.soul_memory import SoulMemory
-from backend.review_gate import ReviewGate
-from backend.intent_engine import IntentEngine
 from backend.tools.base import ToolRegistry
-from backend.tools.file_manager import FileManagerTool
-from backend.tools.web_surfer import WebSurferTool
 from backend.tools.shell_runner import ShellRunnerTool
 from backend.tools.code_executor import CodeExecutorTool
 from backend.tools.obsidian_manager import ObsidianManagerTool
-from backend.tools.cli_bridge import CLIBridgeTool, CLIBudgetTracker
-from backend.tools.vision import VisionTool
 from backend.tools.system_shell import SystemShellTool
 from backend.tools.ollama_manager import OllamaManagerTool
 from backend.tools.self_config import SelfConfigTool
 from backend.tools.ops_executor import OpsExecutor
 from backend.memory.fact_memory import FactMemory
-from backend.llm_router import LLMRouter
 from backend.system_monitor import SystemMonitor
 
 db: Database = None
@@ -55,10 +46,8 @@ fact_memory: FactMemory = None
 soul_memory: SoulMemory = None
 ws_mgr = WSManager()
 telegram: TelegramBot = None
-main_agent: MainAgent = None
 flow: FalkensteinFlow = None
-budget_tracker: CLIBudgetTracker = None
-llm_router: LLMRouter = None
+budget_tracker = None
 telegram_task: asyncio.Task = None
 scheduler: SmartScheduler = None
 
@@ -110,7 +99,7 @@ async def handle_telegram_message(msg: dict):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global db, telegram, telegram_task, main_agent, flow, budget_tracker, scheduler, fact_memory, soul_memory, llm_router
+    global db, telegram, telegram_task, flow, budget_tracker, scheduler, fact_memory, soul_memory
 
     # 1. Database
     db = Database(DB_PATH)
@@ -134,11 +123,6 @@ async def lifespan(app: FastAPI):
     except Exception:
         fact_memory = None
 
-    # 4. LLM + Router (kept for admin_api compatibility, will be removed in Task 13)
-    llm_config = config_service.get_category("llm")
-    llm = LLMClient(config=llm_config)
-    llm_router = LLMRouter(local_llm=llm, config_service=config_service)
-
     # System Monitor
     system_monitor = SystemMonitor()
     await system_monitor.start()
@@ -147,10 +131,6 @@ async def lifespan(app: FastAPI):
     vault_path = config_service.get_path("obsidian_vault_path")
     workspace = config_service.get_path("workspace_path")
     workspace.mkdir(parents=True, exist_ok=True)
-
-    # Budget tracker (still used by /api/budget)
-    cli_budget = config_service.get_int("cli_daily_token_budget", 50000)
-    budget_tracker = CLIBudgetTracker(daily_budget=cli_budget)
 
     # 6. Telegram + Allowlist
     allowlist = TelegramAllowlist(
@@ -224,11 +204,10 @@ async def lifespan(app: FastAPI):
     app.state.flow = flow
     app.state.event_bus = event_bus
 
-    # 11. Wire admin API (main_agent=None, kept for compat — will be cleaned in Task 13)
+    # 11. Wire admin API
     admin_api.set_dependencies(
         db=db, scheduler=scheduler, config_service=config_service,
-        main_agent=None, budget_tracker=budget_tracker,
-        llm_router=llm_router, fact_memory=fact_memory,
+        fact_memory=fact_memory,
         soul_memory=soul_memory, system_monitor=system_monitor,
     )
     admin_api.init(start_time=_time.time())

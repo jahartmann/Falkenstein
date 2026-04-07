@@ -564,24 +564,14 @@ async def delete_reminder(reminder_id: int):
 
 @router.get("/llm-routing")
 async def get_llm_routing():
-    """Get current LLM routing configuration."""
-    if not _llm_router:
-        return {"routing": {}, "providers": []}
-    from backend.llm_router import PROVIDERS
-    return {"routing": _llm_router.get_routing(), "providers": list(PROVIDERS)}
+    """LLM routing removed — CrewAI flow handles model selection."""
+    return {"routing": {}, "providers": []}
 
 
 @router.put("/llm-routing")
 async def put_llm_routing(update: LLMRoutingUpdate):
-    """Update LLM routing configuration."""
-    if not _llm_router:
-        return {"error": "Router not initialized"}
-    from backend.llm_router import PROVIDERS
-    for task_type, provider in update.routing.items():
-        if provider not in PROVIDERS:
-            return {"error": f"Unbekannter Provider: {provider}. Erlaubt: {PROVIDERS}"}
-        await _llm_router.set_routing(task_type, provider)
-    return {"saved": True, "routing": _llm_router.get_routing()}
+    """LLM routing removed — CrewAI flow handles model selection."""
+    return {"error": "LLM routing is no longer configurable via this endpoint."}
 
 
 # ── Tool Log (global) ────────────────────────────────────────────────
