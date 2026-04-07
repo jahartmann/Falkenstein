@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -179,6 +180,28 @@ class Database:
                 result          TEXT,
                 completed_at    TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS crews (
+                id               TEXT PRIMARY KEY,
+                crew_type        TEXT NOT NULL,
+                status           TEXT DEFAULT 'active',
+                trigger_source   TEXT,
+                chat_id          TEXT,
+                task_description TEXT,
+                started_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                finished_at      TIMESTAMP,
+                token_count      INTEGER DEFAULT 0,
+                result_path      TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS knowledge_log (
+                id             TEXT PRIMARY KEY,
+                crew_id        TEXT REFERENCES crews(id),
+                vault_path     TEXT,
+                knowledge_type TEXT,
+                topic          TEXT,
+                created_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
         """)
         await self._conn.commit()
 
@@ -213,6 +236,19 @@ class Database:
             await self._conn.commit()
         except Exception:
             pass  # column already exists
+        # tool_log crew/agent/duration columns
+        for col_def in [
+            "crew_id TEXT",
+            "agent_name TEXT",
+            "duration_ms INTEGER",
+        ]:
+            try:
+                await self._conn.execute(
+                    f"ALTER TABLE tool_log ADD COLUMN {col_def}"
+                )
+                await self._conn.commit()
+            except Exception:
+                pass  # column already exists
 
     # ------------------------------------------------------------------
     # Introspection
@@ -740,5 +776,99 @@ class Database:
 
     async def get_all_config(self) -> list[dict]:
         cursor = await self._conn.execute("SELECT * FROM config ORDER BY key")
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+    # ------------------------------------------------------------------
+    # Crews
+    # ------------------------------------------------------------------
+
+    async def create_crew(
+        self,
+        crew_type: str,
+        trigger_source: str,
+        chat_id: str | None,
+        task_description: str,
+    ) -> str:
+        crew_id = str(uuid.uuid4())[:8]
+        await self._conn.execute(
+            """
+            INSERT INTO crews (id, crew_type, trigger_source, chat_id, task_description)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (crew_id, crew_type, trigger_source, chat_id, task_description),
+        )
+        await self._conn.commit()
+        return crew_id
+
+    async def get_crew(self, crew_id: str) -> dict | None:
+        cursor = await self._conn.execute(
+            "SELECT * FROM crews WHERE id = ?", (crew_id,)
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+    _CREW_FIELDS = {"status", "finished_at", "token_count", "result_path"}
+
+    async def update_crew(self, crew_id: str, **kwargs) -> None:
+        fields = {k: v for k, v in kwargs.items() if k in self._CREW_FIELDS}
+        if not fields:
+            return
+        sets = ", ".join(f"{k} = ?" for k in fields)
+        values = list(fields.values())
+        values.append(crew_id)
+        await self._conn.execute(
+            f"UPDATE crews SET {sets} WHERE id = ?",
+            values,
+        )
+        await self._conn.commit()
+
+    async def log_crew_tool(
+        self,
+        crew_id: str,
+        agent_name: str,
+        tool_name: str,
+        tool_input: Any,
+        tool_output: Any,
+        duration_ms: int,
+    ) -> None:
+        await self._conn.execute(
+            """
+            INSERT INTO tool_log (agent_id, tool_name, input, output, success, crew_id, agent_name, duration_ms)
+            VALUES (?, ?, ?, ?, 1, ?, ?, ?)
+            """,
+            (
+                agent_name,
+                tool_name,
+                json.dumps(tool_input) if not isinstance(tool_input, str) else tool_input,
+                json.dumps(tool_output) if not isinstance(tool_output, str) else tool_output,
+                crew_id,
+                agent_name,
+                duration_ms,
+            ),
+        )
+        await self._conn.commit()
+
+    async def log_knowledge(
+        self,
+        crew_id: str,
+        vault_path: str,
+        knowledge_type: str,
+        topic: str,
+    ) -> None:
+        entry_id = str(uuid.uuid4())[:8]
+        await self._conn.execute(
+            """
+            INSERT INTO knowledge_log (id, crew_id, vault_path, knowledge_type, topic)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (entry_id, crew_id, vault_path, knowledge_type, topic),
+        )
+        await self._conn.commit()
+
+    async def get_active_crews(self) -> list[dict]:
+        cursor = await self._conn.execute(
+            "SELECT * FROM crews WHERE status = 'active' ORDER BY started_at DESC"
+        )
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
