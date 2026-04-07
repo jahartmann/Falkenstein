@@ -126,3 +126,34 @@ class DailyProfile(BaseModel):
     evening_active: str = "20:00-23:30"
     sleep: str = "00:00"
     weekend_shift_hours: float = 1.5
+
+
+class CrewType(str, Enum):
+    coder = "coder"
+    researcher = "researcher"
+    writer = "writer"
+    ops = "ops"
+    web_design = "web_design"
+    swift = "swift"
+    ki_expert = "ki_expert"
+    analyst = "analyst"
+    premium = "premium"
+
+
+class CrewStatus(str, Enum):
+    active = "active"
+    done = "done"
+    error = "error"
+
+
+class CrewData(BaseModel):
+    id: str
+    crew_type: CrewType
+    status: CrewStatus = CrewStatus.active
+    trigger_source: str = ""
+    chat_id: str | None = None
+    task_description: str = ""
+    started_at: str = ""
+    finished_at: str | None = None
+    token_count: int = 0
+    result_path: str | None = None

@@ -42,6 +42,12 @@ class Settings(BaseSettings):
     ollama_num_ctx_extended: int = 131072
     # Brave Search API
     brave_api_key: str = ""
+    # Serper Search API
+    serper_api_key: str = ""
+    # Ollama streaming / keep-alive settings
+    ollama_keep_alive: str = "30m"
+    ollama_stream_tools: bool = False
+    ollama_stream_text: bool = True
 
     @property
     def model_light(self) -> str:

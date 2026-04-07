@@ -6,7 +6,17 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from backend.config import DB_PATH, PORT, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_ALLOWED_CHAT_IDS, API_TOKEN
+from backend.config import DB_PATH, PORT, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_ALLOWED_CHAT_IDS, API_TOKEN, settings
+from backend.native_ollama import NativeOllamaClient
+from backend.event_bus import FalkensteinEventBus
+from backend.vault_index import VaultIndex
+from backend.flow.falkenstein_flow import FalkensteinFlow
+from backend.tools.crewai_wrappers import (
+    CodeExecutorTool as CrewCodeExecutorTool, ShellRunnerTool as CrewShellRunnerTool,
+    SystemShellTool as CrewSystemShellTool,
+    ObsidianTool, OllamaManagerTool as CrewOllamaManagerTool,
+    SelfConfigTool as CrewSelfConfigTool, OpsExecutorTool,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from backend.security.auth import BearerAuthMiddleware
 from backend.security.telegram_allowlist import TelegramAllowlist
@@ -15,29 +25,20 @@ from backend.admin_api import router as admin_router
 from backend.workspace_api import router as workspace_router
 from backend import admin_api
 from backend.database import Database
-from backend.llm_client import LLMClient
 from backend.ws_manager import WSManager
 from backend.telegram_bot import TelegramBot
-from backend.main_agent import MainAgent
 from backend.obsidian_writer import ObsidianWriter
 from backend.smart_scheduler import SmartScheduler
 from backend.memory.soul_memory import SoulMemory
-from backend.review_gate import ReviewGate
-from backend.intent_engine import IntentEngine
 from backend.tools.base import ToolRegistry
-from backend.tools.file_manager import FileManagerTool
-from backend.tools.web_surfer import WebSurferTool
 from backend.tools.shell_runner import ShellRunnerTool
 from backend.tools.code_executor import CodeExecutorTool
 from backend.tools.obsidian_manager import ObsidianManagerTool
-from backend.tools.cli_bridge import CLIBridgeTool, CLIBudgetTracker
-from backend.tools.vision import VisionTool
 from backend.tools.system_shell import SystemShellTool
 from backend.tools.ollama_manager import OllamaManagerTool
 from backend.tools.self_config import SelfConfigTool
 from backend.tools.ops_executor import OpsExecutor
 from backend.memory.fact_memory import FactMemory
-from backend.llm_router import LLMRouter
 from backend.system_monitor import SystemMonitor
 
 db: Database = None
@@ -45,9 +46,8 @@ fact_memory: FactMemory = None
 soul_memory: SoulMemory = None
 ws_mgr = WSManager()
 telegram: TelegramBot = None
-main_agent: MainAgent = None
-budget_tracker: CLIBudgetTracker = None
-llm_router: LLMRouter = None
+flow: FalkensteinFlow = None
+budget_tracker = None
 telegram_task: asyncio.Task = None
 scheduler: SmartScheduler = None
 
@@ -63,7 +63,8 @@ class ExternalAgentIn(BaseModel):
 
 
 async def handle_telegram_message(msg: dict):
-    """All Telegram messages go through MainAgent — including /commands, voice, images."""
+    """All Telegram messages go through FalkensteinFlow — including /commands, voice, images.
+    EventBus handles Telegram responses, so we don't send the result again here."""
     text = (msg.get("text") or "").strip()
     chat_id = msg.get("chat_id", "")
 
@@ -77,7 +78,7 @@ async def handle_telegram_message(msg: dict):
         if transcribed:
             # Combine with any caption
             full_text = f"{text} {transcribed}".strip() if text else transcribed
-            await main_agent.handle_message(full_text, chat_id=chat_id)
+            await flow.handle_message(full_text, chat_id=chat_id)
         else:
             if telegram and telegram.enabled:
                 await telegram.send_message(
@@ -88,17 +89,17 @@ async def handle_telegram_message(msg: dict):
     # Image → analyze with vision
     image_path = msg.get("image_path")
     if image_path:
-        await main_agent.handle_message(text, chat_id=chat_id, image_path=image_path)
+        await flow.handle_message(text, chat_id=chat_id, image_path=image_path)
         return
 
     # Regular text
     if text:
-        await main_agent.handle_message(text, chat_id=chat_id)
+        await flow.handle_message(text, chat_id=chat_id)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global db, telegram, telegram_task, main_agent, budget_tracker, scheduler, fact_memory, soul_memory, llm_router
+    global db, telegram, telegram_task, flow, budget_tracker, scheduler, fact_memory, soul_memory
 
     # 1. Database
     db = Database(DB_PATH)
@@ -122,46 +123,16 @@ async def lifespan(app: FastAPI):
     except Exception:
         fact_memory = None
 
-    # 4. LLM + Router (config from ConfigService)
-    llm_config = config_service.get_category("llm")
-    llm = LLMClient(config=llm_config)
-    llm_router = LLMRouter(local_llm=llm, config_service=config_service)
-
     # System Monitor
     system_monitor = SystemMonitor()
     await system_monitor.start()
 
-    # 5. Tools (use config_service for paths)
+    # 5. Paths from config
     vault_path = config_service.get_path("obsidian_vault_path")
     workspace = config_service.get_path("workspace_path")
     workspace.mkdir(parents=True, exist_ok=True)
 
-    tools = ToolRegistry()
-    tools.register(FileManagerTool(workspace_path=workspace))
-    tools.register(WebSurferTool(config_service=config_service))
-    tools.register(ShellRunnerTool(workspace_path=workspace))
-    tools.register(CodeExecutorTool(workspace_path=workspace))
-    tools.register(ObsidianManagerTool(vault_path=vault_path))
-
-    cli_budget = config_service.get_int("cli_daily_token_budget", 50000)
-    cli_provider = config_service.get("cli_provider", "claude")
-    budget_tracker = CLIBudgetTracker(daily_budget=cli_budget)
-    tools.register(CLIBridgeTool(
-        workspace_path=workspace,
-        budget_tracker=budget_tracker,
-        provider=cli_provider,
-    ))
-    tools.register(VisionTool(workspace_path=workspace, llm=llm))
-    project_root = Path(__file__).parent.parent
-    tools.register(SystemShellTool())
-    tools.register(OpsExecutor(project_root=project_root))
-    tools.register(OllamaManagerTool())
-    tools.register(SelfConfigTool(project_path=project_root))
-
-    # 6. Obsidian Writer
-    obsidian_writer = ObsidianWriter(vault_path=vault_path)
-
-    # 7. Telegram + Allowlist
+    # 6. Telegram + Allowlist
     allowlist = TelegramAllowlist(
         owner_chat_id=TELEGRAM_CHAT_ID,
         allowed_ids_csv=TELEGRAM_ALLOWED_CHAT_IDS,
@@ -173,35 +144,70 @@ async def lifespan(app: FastAPI):
         allowlist=allowlist, download_dir=media_dir,
     )
 
-    # 8. Scheduler (DB-backed, smart)
+    # 7. Scheduler (DB-backed, smart)
     scheduler = SmartScheduler(db)
 
-    # 9. ReviewGate + IntentEngine
-    review_gate = ReviewGate(llm=llm)
-    intent_engine = IntentEngine(llm=llm)
+    # ── NEW: FalkensteinFlow replaces MainAgent ──
 
-    # 10. MainAgent (Falki)
-    main_agent = MainAgent(
-        llm=llm,
-        tools=tools,
-        db=db,
-        obsidian_writer=obsidian_writer,
-        telegram=telegram if telegram.enabled else None,
-        ws_callback=ws_mgr.broadcast,
-        soul_memory=soul_memory,
-        review_gate=review_gate,
-        intent_engine=intent_engine,
-        scheduler=scheduler,
-        llm_router=llm_router,
-        config_service=config_service,
-        allowlist=allowlist,
+    # Native Ollama Client
+    native_ollama = NativeOllamaClient(
+        host=settings.ollama_host,
+        model_light=settings.model_light,
+        model_heavy=settings.model_heavy,
+        keep_alive=settings.ollama_keep_alive,
     )
+
+    # VaultIndex
+    vault_index = None
+    if settings.obsidian_vault_path:
+        vault_index = VaultIndex(settings.obsidian_vault_path)
+        vault_index.scan()
+
+    # EventBus
+    event_bus = FalkensteinEventBus(
+        ws_manager=ws_mgr,
+        telegram_bot=telegram,
+        db=db,
+    )
+
+    # CrewAI Tool instances (wrappers around existing tool executors)
+    code_exec_tool = CrewCodeExecutorTool()
+    shell_tool = CrewShellRunnerTool()
+    sys_shell_tool = CrewSystemShellTool()
+    obsidian_tool = ObsidianTool()
+    ollama_mgr_tool = CrewOllamaManagerTool()
+    self_config_tool = CrewSelfConfigTool()
+    ops_exec_tool = OpsExecutorTool()
+
+    # Tool sets per crew type
+    crew_tools = {
+        "coder": [code_exec_tool, shell_tool],
+        "researcher": [obsidian_tool],
+        "writer": [obsidian_tool],
+        "ops": [ollama_mgr_tool, self_config_tool, sys_shell_tool],
+        "web_design": [shell_tool],
+        "swift": [shell_tool, code_exec_tool],
+        "ki_expert": [shell_tool, code_exec_tool, ollama_mgr_tool],
+        "analyst": [code_exec_tool],
+        "premium": [],
+    }
+
+    # FalkensteinFlow
+    flow = FalkensteinFlow(
+        event_bus=event_bus,
+        native_ollama=native_ollama,
+        vault_index=vault_index,
+        settings=settings,
+        tools=crew_tools,
+    )
+
+    app.state.flow = flow
+    app.state.event_bus = event_bus
 
     # 11. Wire admin API
     admin_api.set_dependencies(
         db=db, scheduler=scheduler, config_service=config_service,
-        main_agent=main_agent, budget_tracker=budget_tracker,
-        llm_router=llm_router, fact_memory=fact_memory,
+        fact_memory=fact_memory,
         soul_memory=soul_memory, system_monitor=system_monitor,
     )
     admin_api.init(start_time=_time.time())
@@ -225,12 +231,12 @@ async def lifespan(app: FastAPI):
                 await telegram.send_message("Soll ich dazu was machen?", chat_id=tg_chat_id)
 
     async def handle_step(step):
-        await main_agent.handle_message(
+        await flow.handle_message(
             step['agent_prompt'], chat_id=step.get('chat_id', ''),
         )
 
     await scheduler.start(
-        on_task_due=main_agent.handle_scheduled,
+        on_task_due=flow.handle_scheduled,
         on_reminder_due=handle_reminder,
         on_step_due=handle_step,
     )
@@ -292,7 +298,7 @@ async def index():
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
     await ws_mgr.connect(ws)
-    status = main_agent.get_status() if main_agent else {"active_agents": []}
+    status = {"active_agents": []}  # Flow uses EventBus for live updates
     await ws.send_json({"type": "full_state", **status})
     try:
         while True:
@@ -307,22 +313,20 @@ async def handle_ws_message(data: dict, ws: WebSocket):
     if msg_type == "submit_task":
         text = data.get("description", data.get("title", ""))
         if text:
-            await main_agent.handle_message(text)
+            await flow.handle_message(text)
     elif msg_type == "get_state":
-        status = main_agent.get_status()
+        status = {"active_agents": []}  # Flow uses EventBus for live updates
         await ws.send_json({"type": "state_update", **status})
 
 
 @app.post("/api/task")
 async def create_task(title: str, description: str = ""):
-    await main_agent.handle_message(description or title)
+    await flow.handle_message(description or title)
     return {"status": "submitted"}
 
 
 @app.get("/api/agents")
 async def get_agents():
-    if main_agent:
-        return main_agent.get_status()
     return {"active_agents": []}
 
 
@@ -334,7 +338,7 @@ async def get_tasks():
 
 @app.get("/api/status")
 async def get_status():
-    status = main_agent.get_status() if main_agent else {"active_agents": []}
+    status = {"active_agents": []}  # Flow uses EventBus for live updates
     if budget_tracker:
         status["budget"] = {
             "used": budget_tracker.used,
@@ -366,7 +370,7 @@ async def register_external_agent(agent: ExternalAgentIn):
         "ts": _time.time(),
     }
     # Broadcast to WS clients
-    if ws_mgr and agent.id not in (main_agent.active_agents if main_agent else {}):
+    if ws_mgr:
         await ws_mgr.broadcast({
             "type": "agent_spawned",
             "agent_id": agent.id,

@@ -44,14 +44,36 @@ export class OfficeWS {
         this.bm.showBubble(msg.agent_id, msg.task || 'Gestartet...');
         break;
 
+      // CrewAI EventBus events (flat format — no data wrapper)
+      case 'agent_spawn':
+        this.am.onAgentSpawn(msg.crew, msg.crew_id, msg.task || '');
+        this.bm.showBubble(msg.crew_id, msg.task || 'Gestartet...');
+        break;
+
+      case 'tool_use':
+        this.am.onToolUse(msg.agent, msg.tool, msg.animation, msg.crew_id);
+        break;
+
+      // Legacy agent_done/agent_error (with agent_id) handled above.
+      // CrewAI crew events use crew_id — check for it:
       case 'agent_done':
-        this.bm.showBubble(msg.agent_id, '\u2705 Fertig!');
-        setTimeout(() => this.am.removeAgent(msg.agent_id), 3000);
+        if (msg.crew_id) {
+          this.bm.showBubble(msg.crew_id, '\u2705 Fertig!');
+          this.am.onAgentDone(msg.crew, msg.crew_id);
+        } else {
+          this.bm.showBubble(msg.agent_id, '\u2705 Fertig!');
+          setTimeout(() => this.am.removeAgent(msg.agent_id), 3000);
+        }
         break;
 
       case 'agent_error':
-        this.bm.showBubble(msg.agent_id, '\u274C Fehler!');
-        setTimeout(() => this.am.removeAgent(msg.agent_id), 3000);
+        if (msg.crew_id) {
+          this.bm.showBubble(msg.crew_id, '\u274C ' + (msg.error || 'Fehler!'));
+          this.am.onAgentError(msg.crew, msg.crew_id, msg.error);
+        } else {
+          this.bm.showBubble(msg.agent_id, '\u274C Fehler!');
+          setTimeout(() => this.am.removeAgent(msg.agent_id), 3000);
+        }
         break;
 
       case 'agent_progress':

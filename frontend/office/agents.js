@@ -3,12 +3,38 @@ import { findPath, findEntrance } from './pathfinding.js';
 // All available character sprite names
 const SPRITE_NAMES = ['Adam', 'Alex', 'Amelia', 'Bob'];
 
+// CrewAI crew type -> character sprite mapping
+const CREW_SKINS = {
+  coder:      'Adam',
+  researcher: 'Alex',
+  writer:     'Amelia',
+  ops:        'Bob',
+  web_design: 'Adam',
+  swift:      'Alex',
+  ki_expert:  'Bob',
+  analyst:    'Amelia',
+  premium:    'Adam',
+};
+
+// Abstract animation name -> sprite animation key suffix
+const ANIMATION_MAP = {
+  typing:   'sit',
+  reading:  'phone',
+  thinking: 'idle_anim',
+  running:  'run',
+};
+
 // Real agent type -> sprite + room mapping
 const AGENT_TYPE_CONFIG = {
   coder:      { sprite: 'Adam',   room: 'Team Büro' },
   researcher: { sprite: 'Alex',   room: 'Deep-Dive 1' },
   writer:     { sprite: 'Amelia', room: 'Fokus-Büro' },
   ops:        { sprite: 'Bob',    room: 'Teamleitung' },
+  web_design: { sprite: 'Adam',   room: 'Team Büro' },
+  swift:      { sprite: 'Alex',   room: 'Deep-Dive 1' },
+  ki_expert:  { sprite: 'Bob',    room: 'Teamleitung' },
+  analyst:    { sprite: 'Amelia', room: 'Fokus-Büro' },
+  premium:    { sprite: 'Adam',   room: 'Team Büro' },
 };
 
 // NPC employees for office liveliness
@@ -394,5 +420,52 @@ export class AgentManager {
   updateAgentStatus(agentId, text) {
     const agent = this.agents.get(agentId);
     if (agent) agent.task = text;
+  }
+
+  /* ── CrewAI EventBus Handlers ── */
+
+  onAgentSpawn(crewType, crewId, task) {
+    // Map crew type to agent type config, falling back to coder
+    const agentType = AGENT_TYPE_CONFIG[crewType] ? crewType : 'coder';
+    this.spawnAgent(crewId, agentType, task);
+  }
+
+  onToolUse(agentName, toolName, animation, crewId) {
+    const agent = this.agents.get(crewId);
+    if (!agent || agent.state === 'leaving') return;
+
+    // Map abstract animation name; fall back to sit (typing) if unknown
+    const animKey = ANIMATION_MAP[animation] || 'sit';
+
+    if (animKey === 'sit') {
+      agent.sprite.anims.play(`${agent.spriteName}_sit`, true);
+    } else if (animKey === 'phone') {
+      agent.sprite.anims.play(`${agent.spriteName}_phone`, true);
+    } else if (animKey === 'idle_anim') {
+      agent.sprite.anims.play(`${agent.spriteName}_idle_down`, true);
+    } else if (animKey === 'run') {
+      // No specific destination — play walk animation in place facing down
+      agent.sprite.anims.play(`${agent.spriteName}_walk_down`, true);
+    }
+
+    agent.task = toolName || task;
+  }
+
+  onAgentDone(crewType, crewId) {
+    const agent = this.agents.get(crewId);
+    if (!agent || agent.isNPC) return;
+
+    // Play idle animation to signal completion, then remove after 5s
+    agent.sprite.anims.play(`${agent.spriteName}_idle_down`, true);
+    setTimeout(() => this.removeAgent(crewId), 5000);
+  }
+
+  onAgentError(crewType, crewId, error) {
+    const agent = this.agents.get(crewId);
+    if (!agent || agent.isNPC) return;
+
+    // Keep current position; error bubble is shown via BubbleManager in ws.js
+    // Remove after 8s to give the user time to read the bubble
+    setTimeout(() => this.removeAgent(crewId), 8000);
   }
 }
