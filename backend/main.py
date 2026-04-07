@@ -63,38 +63,57 @@ class ExternalAgentIn(BaseModel):
 
 
 async def handle_telegram_message(msg: dict):
-    """All Telegram messages go through FalkensteinFlow — including /commands, voice, images.
-    EventBus handles Telegram responses, so we don't send the result again here."""
+    """All Telegram messages go through FalkensteinFlow.
+    For quick_reply: result is returned directly, we send it here.
+    For crews: EventBus sends Telegram messages during lifecycle."""
     text = (msg.get("text") or "").strip()
     chat_id = msg.get("chat_id", "")
 
-    # Voice message → transcribe with Whisper, then process as text
-    voice_path = msg.get("voice_path")
-    if voice_path:
-        from backend.stt import transcribe
-        if telegram and telegram.enabled:
-            await telegram.send_message("Transkribiere...", chat_id=chat_id or None)
-        transcribed = await transcribe(voice_path)
-        if transcribed:
-            # Combine with any caption
-            full_text = f"{text} {transcribed}".strip() if text else transcribed
-            await flow.handle_message(full_text, chat_id=chat_id)
-        else:
+    async def _send_result(result: str):
+        """Send flow result to Telegram if EventBus didn't already."""
+        if result and telegram and telegram.enabled and chat_id:
+            await telegram.send_message(result, chat_id=chat_id)
+
+    try:
+        # Voice message → transcribe with Whisper, then process as text
+        voice_path = msg.get("voice_path")
+        if voice_path:
+            from backend.stt import transcribe
             if telegram and telegram.enabled:
-                await telegram.send_message(
-                    "Konnte die Sprachnachricht nicht verstehen.", chat_id=chat_id or None,
-                )
-        return
+                await telegram.send_message("Transkribiere...", chat_id=chat_id or None)
+            transcribed = await transcribe(voice_path)
+            if transcribed:
+                full_text = f"{text} {transcribed}".strip() if text else transcribed
+                result = await flow.handle_message(full_text, chat_id=chat_id)
+                # quick_reply results aren't sent by EventBus
+                if flow.rule_engine.route(full_text).action == "quick_reply":
+                    await _send_result(result)
+            else:
+                if telegram and telegram.enabled:
+                    await telegram.send_message(
+                        "Konnte die Sprachnachricht nicht verstehen.", chat_id=chat_id or None,
+                    )
+            return
 
-    # Image → analyze with vision
-    image_path = msg.get("image_path")
-    if image_path:
-        await flow.handle_message(text, chat_id=chat_id, image_path=image_path)
-        return
+        # Image → analyze with vision
+        image_path = msg.get("image_path")
+        if image_path:
+            result = await flow.handle_message(text, chat_id=chat_id, image_path=image_path)
+            return
 
-    # Regular text
-    if text:
-        await flow.handle_message(text, chat_id=chat_id)
+        # Regular text
+        if text:
+            # Check if this will be a quick_reply (no EventBus involvement)
+            route = flow.rule_engine.route(text)
+            result = await flow.handle_message(text, chat_id=chat_id)
+            if route.action == "quick_reply":
+                await _send_result(result)
+
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error("Telegram handler error: %s", e, exc_info=True)
+        if telegram and telegram.enabled and chat_id:
+            await telegram.send_message(f"Fehler: {e}", chat_id=chat_id)
 
 
 @asynccontextmanager
