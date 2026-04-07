@@ -18,7 +18,8 @@ _start_time: float = 0.0
 _db = None
 _scheduler = None
 _config_service = None
-_main_agent = None
+_main_agent = None  # Now FalkensteinFlow
+_flow = None
 _budget_tracker = None
 _llm_router = None
 _fact_memory = None
@@ -27,11 +28,12 @@ _system_monitor = None
 
 
 def set_dependencies(db=None, scheduler=None, config_service=None,
-                     main_agent=None, budget_tracker=None, llm_router=None,
+                     main_agent=None, flow=None, budget_tracker=None, llm_router=None,
                      fact_memory=None, soul_memory=None, system_monitor=None):
-    global _db, _scheduler, _config_service, _main_agent, _budget_tracker, _llm_router, _fact_memory, _soul_memory, _system_monitor
+    global _db, _scheduler, _config_service, _main_agent, _flow, _budget_tracker, _llm_router, _fact_memory, _soul_memory, _system_monitor
     _db = db; _scheduler = scheduler; _config_service = config_service
-    _main_agent = main_agent; _budget_tracker = budget_tracker; _llm_router = llm_router
+    _flow = flow; _main_agent = main_agent or flow  # Flow replaces MainAgent
+    _budget_tracker = budget_tracker; _llm_router = llm_router
     _fact_memory = fact_memory; _soul_memory = soul_memory
     _system_monitor = system_monitor
 
@@ -188,7 +190,7 @@ async def create_schedule(data: ScheduleCreate):
 
 @router.post("/schedules/ai-create")
 async def ai_create_schedule(data: ScheduleAICreate):
-    if not _db or not _scheduler or not _main_agent:
+    if not _db or not _scheduler or not _flow:
         return {"error": "Not initialized"}
 
     # LLM enrichment in parallel
@@ -257,7 +259,7 @@ async def toggle_schedule(schedule_id: int):
 
 @router.post("/schedules/{schedule_id}/run")
 async def run_schedule_now(schedule_id: int):
-    if not _scheduler or not _main_agent:
+    if not _scheduler or not _flow:
         return {"error": "Not initialized"}
     # Find task in scheduler's in-memory list
     task = None
@@ -268,7 +270,7 @@ async def run_schedule_now(schedule_id: int):
     if not task:
         return {"error": f"Schedule {schedule_id} not found in scheduler"}
     await _scheduler.mark_run(task)
-    asyncio.create_task(_main_agent.handle_scheduled(task))
+    asyncio.create_task(_flow.handle_scheduled(task))
     return {"triggered": True, "name": task["name"]}
 
 
@@ -380,10 +382,10 @@ async def submit_task(data: TaskSubmit):
     If chat_id is provided (e.g. Telegram chat_id), response goes there.
     Otherwise defaults to "dashboard" for WS push.
     """
-    if not _main_agent:
+    if not _flow:
         return {"error": "Not initialized"}
     chat_id = data.chat_id or "dashboard"
-    asyncio.create_task(_main_agent.handle_message(data.text, chat_id=chat_id))
+    asyncio.create_task(_flow.handle_message(data.text, chat_id=chat_id))
     return {"submitted": True}
 
 

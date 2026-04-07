@@ -207,6 +207,7 @@ async def lifespan(app: FastAPI):
     # 11. Wire admin API
     admin_api.set_dependencies(
         db=db, scheduler=scheduler, config_service=config_service,
+        flow=flow,
         fact_memory=fact_memory,
         soul_memory=soul_memory, system_monitor=system_monitor,
     )
