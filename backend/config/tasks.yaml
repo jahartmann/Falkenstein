@@ -1,0 +1,23 @@
+default:
+  expected_output: "A clear, actionable result in German."
+  human_input: false
+
+code_task:
+  expected_output: "Working code with explanation of changes made."
+  human_input: false
+
+research_task:
+  expected_output: "Structured summary with sources and key findings."
+  human_input: false
+
+writing_task:
+  expected_output: "Well-structured text in German, ready for Obsidian."
+  human_input: false
+
+analysis_task:
+  expected_output: "Data analysis with insights and optional visualization code."
+  human_input: false
+
+ops_task:
+  expected_output: "Execution report with status of each operation."
+  human_input: false
