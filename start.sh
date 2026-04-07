@@ -9,21 +9,41 @@ NC='\033[0m'
 
 echo -e "${GREEN}=== Falkenstein Setup ===${NC}"
 
-# 1. Python check
-if ! command -v python3 &> /dev/null; then
-    echo -e "${RED}Python 3 nicht gefunden. Bitte installiere Python 3.11+${NC}"
+# 1. Python 3.12 check (CrewAI requires Python <3.14)
+PYTHON_BIN=""
+for candidate in python3.12 python3.13 python3.11; do
+    if command -v "$candidate" &> /dev/null; then
+        PYTHON_BIN="$candidate"
+        break
+    fi
+done
+
+if [ -z "$PYTHON_BIN" ]; then
+    # Fallback: check if default python3 is <3.14
+    if command -v python3 &> /dev/null; then
+        PY_MINOR=$(python3 -c 'import sys; print(sys.version_info.minor)')
+        if [ "$PY_MINOR" -lt 14 ]; then
+            PYTHON_BIN="python3"
+        fi
+    fi
+fi
+
+if [ -z "$PYTHON_BIN" ]; then
+    echo -e "${RED}Python 3.11-3.13 nicht gefunden. CrewAI ist nicht kompatibel mit Python 3.14+${NC}"
+    echo -e "${YELLOW}Installiere mit: brew install python@3.12 (macOS) oder apt install python3.12 (Linux)${NC}"
     exit 1
 fi
 
-PY_VERSION=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
-echo -e "Python: ${PY_VERSION}"
+PY_VERSION=$($PYTHON_BIN -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+echo -e "Python: ${PY_VERSION} (${PYTHON_BIN})"
 
-# 2. Virtual environment
-if [ ! -d "venv" ]; then
-    echo -e "${YELLOW}Erstelle Virtual Environment...${NC}"
-    python3 -m venv venv
+# 2. Virtual environment (venv312)
+VENV_DIR="venv312"
+if [ ! -d "$VENV_DIR" ]; then
+    echo -e "${YELLOW}Erstelle Virtual Environment mit ${PYTHON_BIN}...${NC}"
+    $PYTHON_BIN -m venv "$VENV_DIR"
 fi
-source venv/bin/activate
+source "$VENV_DIR/bin/activate"
 
 # 3. Dependencies
 echo -e "${YELLOW}Installiere Abhängigkeiten...${NC}"
@@ -43,7 +63,10 @@ mkdir -p workspace data
 if command -v ollama &> /dev/null; then
     echo -e "Ollama: $(ollama --version 2>/dev/null || echo 'installiert')"
     if ! ollama list 2>/dev/null | grep -q "gemma4"; then
-        echo -e "${YELLOW}Hinweis: gemma4 Modell nicht gefunden. Lade mit: ollama pull gemma4:26b${NC}"
+        echo -e "${YELLOW}Lade gemma4 Modelle...${NC}"
+        ollama pull gemma4:e4b 2>/dev/null &
+        ollama pull gemma4:26b 2>/dev/null &
+        wait
     fi
 else
     echo -e "${YELLOW}Hinweis: Ollama nicht installiert. Siehe https://ollama.ai${NC}"
@@ -58,7 +81,7 @@ _git_watch() {
         NEW_HEAD=$(git rev-parse HEAD 2>/dev/null)
         if [ "$OLD_HEAD" != "$NEW_HEAD" ]; then
             echo -e "\n${GREEN}[Git] Neue Änderungen gezogen. Server wird neugestartet...${NC}"
-            pip install -q -r requirements.txt 2>/dev/null
+            source "$VENV_DIR/bin/activate" && pip install -q -r requirements.txt 2>/dev/null
             kill -9 $SERVER_PID 2>/dev/null
         fi
     done
