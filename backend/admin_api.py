@@ -932,6 +932,14 @@ async def update_server():
 
     async def stream_update():
         import sys as _sys
+
+        # Find the right pip: prefer venv312, fallback to current executable
+        venv312_pip = project_root / "venv312" / "bin" / "pip"
+        if venv312_pip.exists():
+            pip_cmd = [str(venv312_pip), "install", "-r", "requirements.txt"]
+        else:
+            pip_cmd = [_sys.executable, "-m", "pip", "install", "-r", "requirements.txt"]
+
         try:
             # Step 1: git pull
             yield f"data: {_json.dumps({'line': '$ git pull'})}\n\n"
@@ -945,13 +953,10 @@ async def update_server():
                 yield f"data: {_json.dumps({'status': 'error', 'line': str(e)})}\n\n"
                 return
 
-            # Step 2: pip install
-            yield f"data: {_json.dumps({'line': '$ pip install -r requirements.txt'})}\n\n"
+            # Step 2: pip install (uses venv312 if available)
+            yield f"data: {_json.dumps({'line': '$ ' + ' '.join(pip_cmd)})}\n\n"
             try:
-                async for line in _run_cmd(
-                    [_sys.executable, "-m", "pip", "install", "-r", "requirements.txt"],
-                    str(project_root),
-                ):
+                async for line in _run_cmd(pip_cmd, str(project_root)):
                     yield f"data: {_json.dumps({'line': line})}\n\n"
             except RuntimeError as e:
                 yield f"data: {_json.dumps({'status': 'error', 'line': f'pip install fehlgeschlagen ({e})'})}\n\n"
