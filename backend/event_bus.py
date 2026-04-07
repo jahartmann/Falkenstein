@@ -42,6 +42,16 @@ class FalkensteinEventBus:
         self._current_crew_id: str | None = None
         self._current_chat_id: int | str | None = None
 
+    async def _tg_send(self, text: str, chat_id=None):
+        """Send to Telegram only if bot is configured and enabled."""
+        if self.telegram_bot and getattr(self.telegram_bot, "enabled", False):
+            cid = chat_id or self._current_chat_id
+            if cid:
+                try:
+                    await self.telegram_bot.send_message(text, chat_id=cid)
+                except Exception as e:
+                    logger.warning("Telegram send failed: %s", e)
+
     async def on_crew_start(
         self, crew_name: str, task_description: str, chat_id: int | str | None = None
     ) -> str:
@@ -49,21 +59,21 @@ class FalkensteinEventBus:
         self._current_chat_id = chat_id
 
         crew_id = await self.db.create_crew(
-            name=crew_name, task_description=task_description
+            crew_type=crew_name,
+            trigger_source="telegram" if chat_id else "api",
+            chat_id=str(chat_id) if chat_id else None,
+            task_description=task_description,
         )
         self._current_crew_id = crew_id
 
-        await self.telegram_bot.send_message(
-            f"Crew '{crew_name}' gestartet: {task_description}",
-            chat_id=chat_id,
-        )
+        await self._tg_send(f"{crew_name} arbeitet: {task_description}", chat_id)
 
         await self.ws_manager.broadcast(
             {
                 "type": "agent_spawn",
+                "crew": crew_name,
                 "crew_id": crew_id,
-                "crew_name": crew_name,
-                "task_description": task_description,
+                "task": task_description,
             }
         )
 
@@ -74,8 +84,8 @@ class FalkensteinEventBus:
         self,
         agent_name: str,
         tool_name: str,
-        tool_input: Any,
-        tool_output: Any,
+        tool_input: Any = "",
+        tool_output: Any = "",
         duration_ms: int = 0,
     ) -> None:
         """Called after a tool finishes. Broadcasts WS, optionally streams to Telegram, logs to DB."""
@@ -84,88 +94,72 @@ class FalkensteinEventBus:
         await self.ws_manager.broadcast(
             {
                 "type": "tool_use",
-                "agent_name": agent_name,
-                "tool_name": tool_name,
-                "tool_input": tool_input,
-                "tool_output": tool_output,
-                "duration_ms": duration_ms,
+                "agent": agent_name,
+                "tool": tool_name,
                 "animation": animation,
+                "crew_id": self._current_crew_id,
             }
         )
 
-        if tool_name in STREAM_TO_TELEGRAM:
-            output_text = (
-                str(tool_output)[:2000]
-                if tool_output is not None
-                else "(no output)"
-            )
-            await self.telegram_bot.send_message(
-                f"[{agent_name}] {tool_name}:\n{output_text}",
-                chat_id=self._current_chat_id,
-            )
+        if tool_name in STREAM_TO_TELEGRAM and tool_output:
+            truncated = str(tool_output)[:500]
+            await self._tg_send(f"🔧 {tool_name}: {truncated}")
 
-        await self.db.log_crew_tool(
-            crew_id=self._current_crew_id,
-            agent_name=agent_name,
-            tool_name=tool_name,
-            tool_input=tool_input,
-            tool_output=tool_output,
-            duration_ms=duration_ms,
-        )
+        if self._current_crew_id:
+            try:
+                await self.db.log_crew_tool(
+                    crew_id=self._current_crew_id,
+                    agent_name=str(agent_name),
+                    tool_name=str(tool_name),
+                    tool_input=str(tool_input)[:2000] if tool_input else "",
+                    tool_output=str(tool_output)[:2000] if tool_output else "",
+                    duration_ms=duration_ms,
+                )
+            except Exception as e:
+                logger.warning("Failed to log tool use: %s", e)
 
     async def on_crew_done(
         self, crew_name: str, result: Any, chat_id: int | str | None = None
     ) -> None:
         """Called when a crew finishes successfully."""
-        effective_chat_id = chat_id or self._current_chat_id
+        result_text = str(result)[:4000] if result else "(kein Ergebnis)"
+        await self._tg_send(result_text, chat_id)
 
-        result_text = str(result)[:4000] if result is not None else "(kein Ergebnis)"
-        await self.telegram_bot.send_message(
-            f"Crew '{crew_name}' fertig:\n{result_text}",
-            chat_id=effective_chat_id,
-        )
-
-        await self.db.update_crew(
-            crew_id=self._current_crew_id,
-            status="done",
-            result=result,
-        )
+        if self._current_crew_id:
+            await self.db.update_crew(self._current_crew_id, status="done")
 
         await self.ws_manager.broadcast(
             {
                 "type": "agent_done",
-                "crew_name": crew_name,
+                "crew": crew_name,
                 "crew_id": self._current_crew_id,
             }
         )
 
         logger.info("Crew done: %s", crew_name)
+        self._current_crew_id = None
+        self._current_chat_id = None
 
     async def on_crew_error(
         self, crew_name: str, error: str | Exception, chat_id: int | str | None = None
     ) -> None:
         """Called when a crew fails."""
-        effective_chat_id = chat_id or self._current_chat_id
         error_text = str(error)
 
-        await self.telegram_bot.send_message(
-            f"Crew '{crew_name}' Fehler: {error_text}",
-            chat_id=effective_chat_id,
-        )
+        await self._tg_send(f"❌ {crew_name} Fehler: {error_text}", chat_id)
 
-        await self.db.update_crew(
-            crew_id=self._current_crew_id,
-            status="error",
-            result=error_text,
-        )
+        if self._current_crew_id:
+            await self.db.update_crew(self._current_crew_id, status="error")
 
         await self.ws_manager.broadcast(
             {
                 "type": "agent_error",
-                "crew_name": crew_name,
+                "crew": crew_name,
                 "crew_id": self._current_crew_id,
                 "error": error_text,
             }
         )
 
         logger.error("Crew error: %s — %s", crew_name, error_text)
+        self._current_crew_id = None
+        self._current_chat_id = None

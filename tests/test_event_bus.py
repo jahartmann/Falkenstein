@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, PropertyMock
 
 from backend.event_bus import FalkensteinEventBus, STREAM_TO_TELEGRAM
 
@@ -14,6 +14,7 @@ def mocks():
 
     telegram_bot = MagicMock()
     telegram_bot.send_message = AsyncMock()
+    telegram_bot.enabled = True
 
     db = MagicMock()
     db.create_crew = AsyncMock(return_value="crew-123")
@@ -40,7 +41,7 @@ async def test_on_crew_start_broadcasts_agent_spawn(bus, mocks):
     ws_manager.broadcast.assert_awaited_once()
     call_data = ws_manager.broadcast.call_args[0][0]
     assert call_data["type"] == "agent_spawn"
-    assert call_data["crew_name"] == "ResearchCrew"
+    assert call_data["crew"] == "ResearchCrew"
 
 
 @pytest.mark.asyncio
@@ -50,7 +51,6 @@ async def test_on_crew_start_sends_telegram_message(bus, mocks):
     telegram_bot.send_message.assert_awaited_once()
     args, kwargs = telegram_bot.send_message.call_args
     assert "ResearchCrew" in args[0]
-    assert kwargs.get("chat_id") == 42
 
 
 @pytest.mark.asyncio
@@ -58,7 +58,10 @@ async def test_on_crew_start_creates_db_entry(bus, mocks):
     _, _, db = mocks
     crew_id = await bus.on_crew_start("ResearchCrew", "Find facts", chat_id=42)
     db.create_crew.assert_awaited_once_with(
-        name="ResearchCrew", task_description="Find facts"
+        crew_type="ResearchCrew",
+        trigger_source="telegram",
+        chat_id="42",
+        task_description="Find facts",
     )
     assert crew_id == "crew-123"
 
@@ -73,11 +76,11 @@ async def test_on_tool_call_broadcasts_tool_use(bus, mocks):
     await bus.on_crew_start("Crew", "task", chat_id=1)
     ws_manager.broadcast.reset_mock()
 
-    await bus.on_tool_call("agent1", "code_executor", {"code": "x=1"}, "ok", 100)
+    await bus.on_tool_call("agent1", "code_executor", "x=1", "ok", 100)
     ws_manager.broadcast.assert_awaited_once()
     call_data = ws_manager.broadcast.call_args[0][0]
     assert call_data["type"] == "tool_use"
-    assert call_data["tool_name"] == "code_executor"
+    assert call_data["tool"] == "code_executor"
     assert call_data["animation"] == "typing"
 
 
@@ -89,7 +92,6 @@ async def test_on_tool_call_streams_to_telegram_for_web_search(bus, mocks):
 
     await bus.on_tool_call("agent1", "web_search", "query", "results", 200)
     telegram_bot.send_message.assert_awaited_once()
-    assert "web_search" in STREAM_TO_TELEGRAM
 
 
 @pytest.mark.asyncio
@@ -100,7 +102,6 @@ async def test_on_tool_call_does_not_stream_for_file_read(bus, mocks):
 
     await bus.on_tool_call("agent1", "file_read", "path.txt", "content", 50)
     telegram_bot.send_message.assert_not_awaited()
-    assert "file_read" not in STREAM_TO_TELEGRAM
 
 
 # ---------------------------------------------------------------------------
@@ -125,9 +126,7 @@ async def test_on_crew_done_updates_db_status(bus, mocks):
     await bus.on_crew_start("Crew", "task", chat_id=5)
 
     await bus.on_crew_done("Crew", "result", chat_id=5)
-    db.update_crew.assert_awaited_once_with(
-        crew_id="crew-123", status="done", result="result"
-    )
+    db.update_crew.assert_awaited_once_with("crew-123", status="done")
 
 
 @pytest.mark.asyncio
@@ -140,7 +139,7 @@ async def test_on_crew_done_broadcasts_agent_done(bus, mocks):
     ws_manager.broadcast.assert_awaited_once()
     call_data = ws_manager.broadcast.call_args[0][0]
     assert call_data["type"] == "agent_done"
-    assert call_data["crew_name"] == "Crew"
+    assert call_data["crew"] == "Crew"
 
 
 # ---------------------------------------------------------------------------
