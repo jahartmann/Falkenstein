@@ -14,6 +14,7 @@ let _searchTimer = null;
 let currentMemTab = 'user';
 let _allMemories = [];
 let taskViewMode = 'cards';
+const activeAgents = new Map(); // id → {name, type, task, startTime, status}
 
 // ============================================
 // Utilities
@@ -209,16 +210,31 @@ function handleWSMessage(data) {
   const t = data.type || data.event;
 
   if (t === 'agent_spawn' || t === 'agent_spawned') {
+    const agentId = data.crew_id || data.agent_id || ('agent_' + Date.now());
+    activeAgents.set(agentId, {
+      name: data.crew || data.agent_type || 'Agent',
+      type: data.crew || data.agent_type || '',
+      task: data.task || data.description || '',
+      startTime: Date.now(),
+      status: 'active'
+    });
     addActivity('agent_spawned', `Agent gestartet: ${data.task || data.agent_id || ''}`);
+    updateDashboardAgentCount();
     if (document.getElementById('section-dashboard')?.classList.contains('active')) loadDashboard();
     if (document.getElementById('section-agents')?.classList.contains('active')) loadAgents();
   }
   else if (t === 'agent_done') {
+    activeAgents.delete(data.crew_id || data.agent_id);
     addActivity('agent_done', `Agent fertig: ${data.task || data.agent_id || ''}`);
+    updateDashboardAgentCount();
     if (document.getElementById('section-dashboard')?.classList.contains('active')) loadDashboard();
     if (document.getElementById('section-agents')?.classList.contains('active')) loadAgents();
   }
   else if (t === 'agent_error') {
+    const errId = data.crew_id || data.agent_id;
+    const errAgent = errId ? activeAgents.get(errId) : null;
+    if (errAgent) errAgent.status = 'error';
+    if (errId) setTimeout(() => { activeAgents.delete(errId); updateDashboardAgentCount(); loadAgents(); }, 5000);
     addActivity('agent_error', `Agent Fehler: ${data.error || data.agent_id || ''}`);
     showToast('Agent Fehler: ' + (data.error || 'Unbekannt'));
   }
@@ -286,16 +302,16 @@ document.getElementById('quickchat-input')?.addEventListener('keydown', (e) => {
 async function loadDashboard() {
   try {
     const data = await api('/dashboard');
-    document.getElementById('stat-agents').textContent = data.active_agents ? data.active_agents.length : 0;
+    document.getElementById('stat-agents').textContent = activeAgents.size;
     document.getElementById('stat-tasks').textContent = data.open_tasks_count || 0;
 
-    // Agents mini
+    // Agents mini — from live WS tracking
     const agentsEl = document.getElementById('dash-agents');
-    if (data.active_agents && data.active_agents.length > 0) {
-      agentsEl.innerHTML = data.active_agents.map(a =>
+    if (activeAgents.size > 0) {
+      agentsEl.innerHTML = Array.from(activeAgents.entries()).map(([id, a]) =>
         `<div class="activity-item">
-          <div class="status-dot online pulse"></div>
-          <span>${esc(a.task || a.name || a.agent_id)}</span>
+          <div class="status-dot ${a.status === 'active' ? 'online pulse' : ''}"></div>
+          <span>${esc(a.task || a.name || id)}</span>
           ${agentBadge(a.type)}
         </div>`
       ).join('');
@@ -405,38 +421,37 @@ function renderActivity() {
   ).join('');
 }
 
+function updateDashboardAgentCount() {
+  const el = document.getElementById('stat-agents');
+  if (el) el.textContent = activeAgents.size;
+}
+
 // ============================================
 // Agents
 // ============================================
 
-async function loadAgents() {
-  try {
-    const data = await api('/dashboard');
-    const grid = document.getElementById('agents-grid');
-    const agents = data.active_agents || [];
-    if (agents.length === 0) {
-      grid.innerHTML = '<div class="card" style="grid-column:1/-1"><span class="text-muted">Keine aktiven Agents</span></div>';
-      return;
-    }
-    grid.innerHTML = agents.map(a => `
-      <div class="card">
-        <div class="card-header">
-          <div style="display:flex;align-items:center;gap:8px">
-            <div class="status-dot online pulse"></div>
-            ${esc(a.agent_id ? a.agent_id.slice(-8) : 'Agent')}
-          </div>
-          ${agentBadge(a.type)}
-        </div>
-        <div style="font-size:13px;color:var(--text-muted);margin-bottom:8px">${esc(a.task || a.name || '')}</div>
-        ${a.model ? `<div style="font-size:12px;color:var(--text-muted)">Modell: ${esc(a.model)}</div>` : ''}
-        ${a.started_at ? `<div style="font-size:12px;color:var(--text-muted)">Gestartet: ${relTime(a.started_at)}</div>` : ''}
-        ${a.current_tool ? `<div class="mt-16"><span class="badge badge-accent">Tool: ${esc(a.current_tool)}</span></div>` : ''}
-      </div>
-    `).join('');
-  } catch (e) {
-    document.getElementById('agents-grid').innerHTML = '<div class="card"><span class="text-muted">Fehler beim Laden</span></div>';
-    console.error('Agents load error:', e);
+function loadAgents() {
+  const grid = document.getElementById('agents-grid');
+  if (activeAgents.size === 0) {
+    grid.innerHTML = '<div class="card" style="grid-column:1/-1;text-align:center;color:var(--text-muted);padding:40px">Keine aktiven Agents</div>';
+    return;
   }
+  grid.innerHTML = Array.from(activeAgents.entries()).map(([id, a]) => `
+    <div class="card" style="border-left:3px solid ${a.status === 'error' ? 'var(--red)' : 'var(--green)'}">
+      <div class="card-header">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span class="status-dot ${a.status === 'active' ? 'online pulse' : 'error'}"></span>
+          ${esc(a.name)}
+        </div>
+        ${badge(a.status)}
+      </div>
+      <div style="font-size:13px;color:var(--text-muted)">
+        <div>Typ: <strong>${esc(a.type)}</strong></div>
+        <div>Task: ${esc(a.task)}</div>
+        <div>Laufzeit: ${Math.round((Date.now() - a.startTime) / 1000)}s</div>
+      </div>
+    </div>
+  `).join('');
 }
 
 // ============================================
@@ -537,10 +552,9 @@ async function loadTasks() {
             ${badge(s)}
             <span class="task-card-time">${relTime(t.created_at)}</span>
           </div>
-          <div class="task-card-title">${esc(t.description || t.task || '')}</div>
+          <div class="task-card-title">${esc(t.title || t.description || '')}</div>
           <div class="task-card-meta">
-            ${t.agent_type ? `Agent: ${agentBadge(t.agent_type)}` : ''}
-            ${t.priority && t.priority !== 'normal' ? `<span class="badge badge-accent">${esc(t.priority)}</span>` : ''}
+            ${t.agent ? `Agent: ${agentBadge(t.agent)}` : ''}
           </div>
           <div class="task-card-actions">
             <select class="task-status-select" onchange="patchTaskStatus('${esc(t.id)}', this.value)">
