@@ -4,7 +4,7 @@ from backend.mcp.config import MCPServerConfig, ServerStatus
 
 KNOWN_SERVERS: dict[str, dict] = {
     "apple-mcp": {"name": "Apple Services", "command": "npx", "args": ["-y", "apple-mcp"]},
-    "desktop-commander": {"name": "Desktop Commander", "command": "npx", "args": ["-y", "desktop-commander-mcp"]},
+    "desktop-commander": {"name": "Desktop Commander", "command": "npx", "args": ["-y", "@wonderwhy-er/desktop-commander"]},
     "mcp-obsidian": {"name": "Obsidian Vault", "command": "npx", "args": ["-y", "mcp-obsidian"]},
 }
 
