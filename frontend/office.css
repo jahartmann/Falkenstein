@@ -91,3 +91,52 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: #1a1a2e; }
   pointer-events: none; transition: opacity 0.2s;
 }
 .interact-hint.hidden { opacity: 0; }
+
+/* Music Player */
+.music-player {
+  position: fixed; bottom: 16px; left: 16px;
+  background: rgba(26, 26, 46, 0.9);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 12px; padding: 10px 16px;
+  display: flex; align-items: center; gap: 12px;
+  z-index: 1000; backdrop-filter: blur(8px);
+  color: #e0e0e0; font-family: 'Courier New', monospace; font-size: 12px;
+}
+.music-controls { display: flex; gap: 4px; }
+.music-controls button {
+  background: none; border: 1px solid rgba(255,255,255,0.2);
+  color: #e0e0e0; border-radius: 4px; padding: 4px 8px; cursor: pointer;
+}
+.music-controls button:hover { background: rgba(255,255,255,0.1); }
+.music-volume { width: 60px; accent-color: #44ff88; }
+#music-genre {
+  background: rgba(255,255,255,0.1); color: #e0e0e0;
+  border: 1px solid rgba(255,255,255,0.2); border-radius: 4px; padding: 2px 4px; font-size: 11px;
+}
+
+/* Activity Feed */
+.office-activity-feed {
+  position: fixed; bottom: 16px; right: 16px; width: 250px; max-height: 200px;
+  background: rgba(26, 26, 46, 0.85);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 12px; padding: 10px 14px;
+  z-index: 1000; backdrop-filter: blur(8px);
+  color: #e0e0e0; font-family: 'Courier New', monospace; font-size: 11px;
+  overflow-y: auto; transition: opacity 0.5s;
+}
+.office-activity-feed.faded { opacity: 0.3; }
+.feed-header { font-weight: bold; margin-bottom: 6px; color: #44ff88; font-size: 12px; }
+.feed-entry { padding: 3px 0; border-bottom: 1px solid rgba(255,255,255,0.05); display: flex; gap: 6px; }
+.feed-entry .feed-time { color: #666; min-width: 45px; }
+
+/* Back button */
+.office-back-btn {
+  position: fixed; top: 16px; right: 16px;
+  background: rgba(26, 26, 46, 0.9);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 8px; padding: 8px 16px;
+  color: #e0e0e0; text-decoration: none;
+  font-family: 'Courier New', monospace; font-size: 13px;
+  z-index: 1000; backdrop-filter: blur(8px);
+}
+.office-back-btn:hover { background: rgba(68, 255, 136, 0.2); }

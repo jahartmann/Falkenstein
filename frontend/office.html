@@ -33,7 +33,31 @@
   <!-- Interaction hint -->
   <div class="interact-hint hidden" id="interact-hint">[E] Interagieren</div>
 
+  <!-- Music Player -->
+  <div id="music-player" class="music-player">
+    <div class="music-info"><span class="music-icon">🎵</span><span id="music-title">Lofi Beats</span></div>
+    <div class="music-controls">
+      <button onclick="musicPlayer.prev()">⏮</button>
+      <button id="music-toggle" onclick="musicPlayer.toggle()">▶</button>
+      <button onclick="musicPlayer.next()">⏭</button>
+    </div>
+    <input type="range" id="music-volume" class="music-volume" min="0" max="100" value="30" oninput="musicPlayer.setVolume(this.value/100)">
+    <select id="music-genre" onchange="musicPlayer.setGenre(this.value)">
+      <option value="lofi">Lofi</option><option value="jazz">Jazz</option>
+      <option value="ambient">Ambient</option><option value="classical">Classical</option>
+    </select>
+  </div>
+
+  <!-- Activity Feed -->
+  <div id="activity-feed" class="office-activity-feed">
+    <div class="feed-header">Aktivitäten</div>
+    <div id="feed-entries"></div>
+  </div>
+  <a href="/" class="office-back-btn">← Zurück</a>
+
   <script src="https://cdn.jsdelivr.net/npm/phaser@3.80.1/dist/phaser.min.js"></script>
+  <script src="/static/office/music.js"></script>
+  <script src="/static/office/daylight.js"></script>
   <script type="module" src="/static/office/main.js"></script>
 </body>
 </html>
