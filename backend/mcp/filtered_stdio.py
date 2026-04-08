@@ -48,7 +48,7 @@ async def filtered_stdio_client(server: StdioServerParameters, errlog: TextIO = 
             [server.command, *server.args],
             env=env,
             stderr=errlog,
-            cwd=server.cwd,
+            cwd=getattr(server, "cwd", None),
             start_new_session=True,
         )
     except OSError:
