@@ -288,7 +288,26 @@ async def delete_schedule(schedule_id: int):
 async def get_config():
     if not _config_service:
         return {"config": []}
-    return {"config": _config_service.get_all()}
+    config_list = _config_service.get_all()
+    # Merge Settings (.env) fields that might not be in ConfigService DB
+    from backend.config import settings as _settings
+    existing_keys = {c["key"] for c in config_list}
+    settings_fields = {
+        "mcp_servers": ("MCP Server", "mcp"),
+        "mcp_apple_enabled": ("Apple MCP aktiv", "mcp"),
+        "mcp_desktop_commander_enabled": ("Desktop Commander aktiv", "mcp"),
+        "mcp_obsidian_enabled": ("Obsidian MCP aktiv", "mcp"),
+        "mcp_node_path": ("Node/NPX Pfad", "mcp"),
+        "mcp_auto_restart": ("Auto-Restart bei Crash", "mcp"),
+        "mcp_health_interval": ("Health-Check Intervall (s)", "mcp"),
+        "ollama_num_ctx": ("Kontext-Fenster", "ollama"),
+        "ollama_keep_alive": ("Keep Alive", "ollama"),
+    }
+    for key, (desc, cat) in settings_fields.items():
+        if key not in existing_keys and hasattr(_settings, key):
+            val = getattr(_settings, key)
+            config_list.append({"key": key, "value": str(val), "category": cat, "description": desc})
+    return {"config": config_list}
 
 
 @router.get("/config/{category}")

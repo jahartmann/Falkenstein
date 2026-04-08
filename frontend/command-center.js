@@ -957,9 +957,10 @@ async function loadSystem() {
 
 const CONFIG_GROUPS = {
   'Allgemein': ['api_token', 'bot_name', 'language'],
-  'LLM': ['ollama_host', 'ollama_model', 'ollama_model_heavy', 'premium_provider', 'premium_model'],
+  'LLM': ['ollama_host', 'ollama_model', 'ollama_model_heavy', 'ollama_num_ctx', 'ollama_keep_alive'],
   'Telegram': ['telegram_bot_token', 'telegram_admin_id'],
   'Obsidian': ['obsidian_vault_path'],
+  'MCP Server': ['mcp_servers', 'mcp_apple_enabled', 'mcp_desktop_commander_enabled', 'mcp_obsidian_enabled', 'mcp_node_path', 'mcp_auto_restart'],
   'API Schluessel': ['serper_api_key', 'brave_api_key'],
 };
 
@@ -975,8 +976,16 @@ const CONFIG_LABELS = {
   telegram_bot_token: 'Telegram Bot Token',
   telegram_admin_id: 'Telegram Admin ID',
   obsidian_vault_path: 'Vault Pfad',
+  ollama_num_ctx: 'Kontext-Fenster',
+  ollama_keep_alive: 'Keep Alive',
   serper_api_key: 'Serper API Key',
   brave_api_key: 'Brave API Key',
+  mcp_servers: 'MCP Server (kommagetrennt)',
+  mcp_apple_enabled: 'Apple MCP aktiv',
+  mcp_desktop_commander_enabled: 'Desktop Commander aktiv',
+  mcp_obsidian_enabled: 'Obsidian MCP aktiv',
+  mcp_node_path: 'Node/NPX Pfad',
+  mcp_auto_restart: 'Auto-Restart',
 };
 
 async function loadConfig() {
