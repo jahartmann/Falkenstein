@@ -50,10 +50,26 @@ class SoulMemory:
         await self.db._conn.commit()
         return cursor.lastrowid
 
-    async def update(self, memory_id: int, new_value: str):
+    async def update(self, memory_id: int, new_value: str = None, category: str = None, key: str = None):
+        """Update an existing memory entry. Only updates provided fields."""
+        fields = []
+        params = []
+        if new_value is not None:
+            fields.append("value = ?")
+            params.append(new_value)
+        if category is not None:
+            fields.append("category = ?")
+            params.append(category)
+        if key is not None:
+            fields.append("key = ?")
+            params.append(key)
+        if not fields:
+            return
+        fields.append("updated_at = datetime('now')")
+        params.append(memory_id)
         await self.db._conn.execute(
-            "UPDATE memories SET value = ?, updated_at = datetime('now') WHERE id = ?",
-            (new_value, memory_id),
+            f"UPDATE memories SET {', '.join(fields)} WHERE id = ?",
+            params,
         )
         await self.db._conn.commit()
 
@@ -77,6 +93,36 @@ class SoulMemory:
         )
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
+
+    async def find_similar(self, layer: str, value: str, threshold: float = 0.7) -> list[dict]:
+        """Find memories with similar values using simple word-overlap matching."""
+        all_memories = await self.get_by_layer(layer)
+        similar = []
+        value_lower = value.lower().strip()
+        for mem in all_memories:
+            mem_value = (mem.get('value') or '').lower().strip()
+            if not value_lower or not mem_value:
+                continue
+            value_words = set(value_lower.split())
+            mem_words = set(mem_value.split())
+            if not value_words or not mem_words:
+                continue
+            overlap = len(value_words & mem_words) / max(len(value_words), len(mem_words))
+            if overlap >= threshold:
+                similar.append(mem)
+        return similar
+
+    async def upsert(self, layer: str, category: str, key: str, value: str) -> dict:
+        """Insert or update memory. Updates the most similar existing entry if found."""
+        similar = await self.find_similar(layer, value, threshold=0.6)
+        if similar:
+            existing = similar[0]
+            existing_id = existing.get('id')
+            await self.update(existing_id, new_value=value)
+            return {"action": "updated", "id": existing_id}
+        else:
+            new_id = await self.add(layer, category, key, value, source="dashboard")
+            return {"action": "created", "id": new_id}
 
     async def count(self) -> int:
         cursor = await self.db._conn.execute("SELECT COUNT(*) FROM memories")
@@ -194,18 +240,26 @@ class SoulMemory:
             for action in actions:
                 act = action.get("action", "").upper()
                 if act == "ADD":
-                    await self.add(
-                        layer=action.get("layer", "user"),
-                        category=action.get("category", "general"),
-                        key=action.get("key", ""),
-                        value=action.get("value", ""),
-                        source="conversation",
-                    )
+                    # Use upsert to avoid duplicates from repeated conversations
+                    layer = action.get("layer", "user")
+                    value = action.get("value", "")
+                    if value:
+                        similar = await self.find_similar(layer, value, threshold=0.6)
+                        if similar:
+                            await self.update(similar[0]['id'], new_value=value)
+                        else:
+                            await self.add(
+                                layer=layer,
+                                category=action.get("category", "general"),
+                                key=action.get("key", ""),
+                                value=value,
+                                source="conversation",
+                            )
                 elif act == "UPDATE":
                     mid = action.get("id")
                     value = action.get("value", "")
                     if mid and value:
-                        await self.update(int(mid), value)
+                        await self.update(int(mid), new_value=value)
                 elif act == "DELETE":
                     mid = action.get("id")
                     if mid:

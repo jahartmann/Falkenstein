@@ -491,10 +491,13 @@ async def get_siri_info():
 # ── Memory ───────────────────────────────────────────────────────────
 
 @router.get("/memory")
-async def get_memory():
-    """Get all stored memories (SoulMemory 3-layer system)."""
+async def get_memory(layer: str = ""):
+    """Get all stored memories (SoulMemory 3-layer system), optionally filtered by layer."""
     if _soul_memory:
-        memories = await _soul_memory.get_all()
+        if layer and layer in ("user", "self", "relationship"):
+            memories = await _soul_memory.get_by_layer(layer)
+        else:
+            memories = await _soul_memory.get_all()
         return {
             "memories": [
                 {"id": m["id"], "layer": m["layer"], "category": m["category"],
@@ -523,14 +526,34 @@ class MemoryCreate(BaseModel):
 
 @router.post("/memory")
 async def create_memory(mem: MemoryCreate):
-    """Manually add a memory entry."""
+    """Add a memory entry, deduplicating via upsert."""
     if not _soul_memory:
         return {"error": "Memory not initialized"}
-    mid = await _soul_memory.add(
+    result = await _soul_memory.upsert(
         layer=mem.layer, category=mem.category,
-        key=mem.key, value=mem.value, source="dashboard",
+        key=mem.key, value=mem.value,
     )
-    return {"id": mid, "saved": True}
+    return {"id": result["id"], "action": result["action"], "saved": True}
+
+
+class MemoryUpdate(BaseModel):
+    value: str = None
+    category: str = None
+    key: str = None
+
+
+@router.put("/memory/{memory_id}")
+async def update_memory(memory_id: int, body: MemoryUpdate):
+    """Update an existing memory entry."""
+    if not _soul_memory:
+        return {"error": "Memory not initialized"}
+    await _soul_memory.update(
+        memory_id=memory_id,
+        new_value=body.value,
+        category=body.category,
+        key=body.key,
+    )
+    return {"updated": True, "id": memory_id}
 
 
 # ── Reminders ────────────────────────────────────────────────────────

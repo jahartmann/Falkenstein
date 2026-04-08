@@ -832,46 +832,122 @@ function switchMemTab(tab) {
   currentMemTab = tab;
   document.querySelectorAll('[data-mem-tab]').forEach(b => {
     b.classList.toggle('btn-primary', b.dataset.memTab === tab);
+    b.classList.toggle('btn-sm', true);
   });
-  loadMemory();
+  renderMemoryCards();
 }
 
 async function loadMemory() {
   try {
-    const data = await api('/memory?layer=' + currentMemTab);
-    const entries = data.entries || data.memories || data || [];
-    const el = document.getElementById('memory-content');
-    const labels = { short: 'Kurzzeit', long: 'Langzeit', entity: 'Entitaeten' };
-    if (Array.isArray(entries) && entries.length > 0) {
-      el.innerHTML = entries.map(m => `
-        <div class="activity-item" style="padding:8px 0">
-          <span style="flex:1">${esc(m.content || m.text || m.key || JSON.stringify(m))}</span>
-          <span class="activity-time">${relTime(m.created_at || m.timestamp)}</span>
-          <button class="btn-icon" onclick="deleteMemory('${esc(m.id || '')}')">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
-          </button>
-        </div>
-      `).join('');
-    } else {
-      el.innerHTML = `<span class="text-muted">Keine ${labels[currentMemTab] || ''} Eintraege</span>`;
-    }
+    const data = await api('/memory');
+    _allMemories = data.memories || data.entries || data || [];
+    renderMemoryCards();
   } catch (e) {
     document.getElementById('memory-content').innerHTML = '<span class="text-muted">Memory nicht verfuegbar</span>';
     console.error('Memory load error:', e);
   }
 }
 
+function filterMemoryCards() {
+  renderMemoryCards();
+}
+
+function renderMemoryCards() {
+  const el = document.getElementById('memory-content');
+  const search = (document.getElementById('memory-search')?.value || '').toLowerCase();
+  const layerLabels = { user: 'Nutzer', self: 'Self', relationship: 'Beziehung' };
+
+  let entries = _allMemories;
+  if (currentMemTab !== 'all') {
+    entries = entries.filter(m => m.layer === currentMemTab);
+  }
+  if (search) {
+    entries = entries.filter(m =>
+      (m.value || '').toLowerCase().includes(search) ||
+      (m.key || '').toLowerCase().includes(search) ||
+      (m.category || '').toLowerCase().includes(search)
+    );
+  }
+
+  if (!entries.length) {
+    el.innerHTML = '<span class="text-muted">Keine Eintraege gefunden</span>';
+    return;
+  }
+
+  el.innerHTML = entries.map(m => {
+    const layerBadge = `<span style="font-size:10px;padding:2px 6px;border-radius:3px;background:var(--bg-tertiary);color:var(--text-muted);text-transform:uppercase">${esc(m.layer || '')}</span>`;
+    const catKey = [m.category, m.key].filter(Boolean).join(' / ');
+    return `
+    <div class="memory-card" id="mem-card-${m.id}" style="border:1px solid var(--border);border-radius:6px;padding:10px 12px;margin-bottom:8px">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
+        ${layerBadge}
+        <span style="font-size:12px;color:var(--text-muted);flex:1">${esc(catKey)}</span>
+        <button class="btn-icon" title="Bearbeiten" onclick="startEditMemory(${m.id})">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+        </button>
+        <button class="btn-icon" title="Loeschen" onclick="deleteMemory(${m.id})" style="color:var(--red,#e74c3c)">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div id="mem-value-${m.id}" style="font-size:13px;line-height:1.5">${esc(m.value || '')}</div>
+      <div id="mem-edit-${m.id}" style="display:none;margin-top:6px">
+        <textarea id="mem-textarea-${m.id}" style="width:100%;min-height:60px;background:var(--bg-secondary);color:var(--text-primary);border:1px solid var(--border);border-radius:4px;padding:6px;font-size:13px;resize:vertical">${esc(m.value || '')}</textarea>
+        <div style="display:flex;gap:6px;margin-top:4px">
+          <button class="btn btn-primary btn-sm" onclick="saveEditMemory(${m.id})">Speichern</button>
+          <button class="btn btn-sm" onclick="cancelEditMemory(${m.id})">Abbrechen</button>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function startEditMemory(id) {
+  document.getElementById('mem-value-' + id).style.display = 'none';
+  document.getElementById('mem-edit-' + id).style.display = 'block';
+  const ta = document.getElementById('mem-textarea-' + id);
+  ta.focus();
+  ta.setSelectionRange(ta.value.length, ta.value.length);
+}
+
+function cancelEditMemory(id) {
+  document.getElementById('mem-value-' + id).style.display = 'block';
+  document.getElementById('mem-edit-' + id).style.display = 'none';
+}
+
+async function saveEditMemory(id) {
+  const value = document.getElementById('mem-textarea-' + id).value.trim();
+  if (!value) return;
+  try {
+    await api('/memory/' + id, {
+      method: 'PUT',
+      body: JSON.stringify({ value }),
+    });
+    showToast('Gespeichert');
+    // Update in-memory cache without full reload
+    const mem = _allMemories.find(m => m.id === id);
+    if (mem) mem.value = value;
+    document.getElementById('mem-value-' + id).textContent = value;
+    cancelEditMemory(id);
+  } catch (e) { showToast('Fehler: ' + e.message); }
+}
+
 async function addMemory() {
   const input = document.getElementById('memory-input');
-  const text = input.value.trim();
-  if (!text) return;
+  const category = document.getElementById('memory-category');
+  const layerEl = document.getElementById('memory-layer');
+  const value = input.value.trim();
+  if (!value) return;
+  const layer = layerEl?.value || 'user';
+  const cat = category?.value.trim() || 'general';
   try {
-    await api('/memory', {
+    const result = await api('/memory', {
       method: 'POST',
-      body: JSON.stringify({ content: text, layer: currentMemTab }),
+      body: JSON.stringify({ value, layer, category: cat, key: cat }),
     });
     input.value = '';
-    showToast('Eintrag gespeichert');
+    if (category) category.value = '';
+    const action = result.action === 'updated' ? 'Eintrag aktualisiert (Duplikat erkannt)' : 'Eintrag gespeichert';
+    showToast(action);
     loadMemory();
   } catch (e) { showToast('Fehler: ' + e.message); }
 }
@@ -881,7 +957,8 @@ async function deleteMemory(id) {
   try {
     await api('/memory/' + id, { method: 'DELETE' });
     showToast('Eintrag geloescht');
-    loadMemory();
+    _allMemories = _allMemories.filter(m => m.id !== id);
+    renderMemoryCards();
   } catch (e) { showToast('Fehler: ' + e.message); }
 }
 
