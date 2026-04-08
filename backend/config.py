@@ -48,6 +48,15 @@ class Settings(BaseSettings):
     ollama_keep_alive: str = "30m"
     ollama_stream_tools: bool = False
     ollama_stream_text: bool = True
+    # MCP Configuration
+    mcp_servers: str = ""
+    mcp_apple_enabled: bool = False
+    mcp_desktop_commander_enabled: bool = False
+    mcp_obsidian_enabled: bool = False
+    mcp_obsidian_api_key: str = ""
+    mcp_node_path: str = "npx"
+    mcp_auto_restart: bool = True
+    mcp_health_interval: int = 30
 
     @property
     def model_light(self) -> str:
@@ -69,6 +78,8 @@ HOT_RELOAD_FIELDS: set[str] = {
     "obsidian_vault_path",
     "llm_max_retries",
     "serper_api_key", "brave_api_key",
+    "mcp_apple_enabled", "mcp_desktop_commander_enabled", "mcp_obsidian_enabled",
+    "mcp_auto_restart", "mcp_health_interval",
 }
 
 settings = Settings()
