@@ -142,7 +142,7 @@
 
       <!-- ========== Schedules ========== -->
       <section class="section" id="section-schedules">
-        <div style="margin-bottom:16px"><button class="btn btn-primary" onclick="openModal('schedule-modal')">+ Neuer Schedule</button></div>
+        <div style="margin-bottom:16px"><button class="btn btn-primary" onclick="openScheduleModal()">+ Neuer Schedule</button></div>
         <div class="card-grid" id="schedules-grid"><span class="text-muted">Lade...</span></div>
       </section>
 
@@ -151,17 +151,32 @@
         <div class="card">
           <div class="card-header">
             Memory
-            <div>
-              <button class="btn btn-sm" data-mem-tab="short" onclick="switchMemTab('short')">Kurzzeit</button>
-              <button class="btn btn-sm" data-mem-tab="long" onclick="switchMemTab('long')">Langzeit</button>
-              <button class="btn btn-sm" data-mem-tab="entity" onclick="switchMemTab('entity')">Entitaeten</button>
-            </div>
+            <button class="btn btn-sm" onclick="loadMemory()">Aktualisieren</button>
           </div>
+
+          <!-- Layer tabs + search -->
+          <div class="filter-bar" style="margin-bottom:12px">
+            <button class="btn btn-sm btn-primary" data-mem-tab="all" onclick="switchMemTab('all')">Alle</button>
+            <button class="btn btn-sm" data-mem-tab="user" onclick="switchMemTab('user')">Nutzer</button>
+            <button class="btn btn-sm" data-mem-tab="self" onclick="switchMemTab('self')">Self</button>
+            <button class="btn btn-sm" data-mem-tab="relationship" onclick="switchMemTab('relationship')">Beziehung</button>
+            <input type="text" id="memory-search" placeholder="Suchen..." oninput="filterMemoryCards()" style="flex:1;min-width:120px">
+          </div>
+
+          <!-- Memory cards -->
           <div id="memory-content"><span class="text-muted">Lade...</span></div>
-          <div class="mt-16">
-            <div class="filter-bar">
-              <input type="text" id="memory-input" placeholder="Neuen Eintrag hinzufuegen...">
-              <button class="btn btn-primary btn-sm" onclick="addMemory()">Speichern</button>
+
+          <!-- Add new memory -->
+          <div class="mt-16" style="border-top:1px solid var(--border);padding-top:12px">
+            <div style="display:grid;grid-template-columns:1fr 1fr 2fr auto;gap:8px;align-items:center">
+              <select id="memory-layer" style="height:32px;padding:0 8px;background:var(--bg-secondary);color:var(--text-primary);border:1px solid var(--border);border-radius:4px">
+                <option value="user">Nutzer</option>
+                <option value="self">Self</option>
+                <option value="relationship">Beziehung</option>
+              </select>
+              <input type="text" id="memory-category" placeholder="Kategorie" style="height:32px;background:var(--bg-secondary);color:var(--text-primary);border:1px solid var(--border);border-radius:4px;padding:0 8px">
+              <input type="text" id="memory-input" placeholder="Eintrag..." style="height:32px;background:var(--bg-secondary);color:var(--text-primary);border:1px solid var(--border);border-radius:4px;padding:0 8px">
+              <button class="btn btn-primary btn-sm" onclick="addMemory()">+ Hinzufuegen</button>
             </div>
           </div>
         </div>
@@ -227,17 +242,22 @@
     </div>
   </div>
 
-  <!-- Modal: Schedule erstellen -->
+  <!-- Modal: Schedule erstellen / bearbeiten -->
   <div class="modal-overlay" id="schedule-modal">
     <div class="modal">
-      <h3>Neuen Schedule erstellen</h3>
-      <label>Aufgabe</label>
-      <textarea id="schedule-modal-task" rows="2" placeholder="Task-Beschreibung"></textarea>
-      <label>Cron-Ausdruck</label>
-      <input type="text" id="schedule-modal-cron" placeholder="z.B. 0 9 * * * (taeglich 9 Uhr)">
+      <h3 id="schedule-modal-title">Neuen Schedule erstellen</h3>
+      <label>Name</label>
+      <input type="text" id="schedule-name" placeholder="z.B. Tagesreport">
+      <label>Cron-Ausdruck / Zeitplan</label>
+      <input type="text" id="schedule-cron" placeholder="z.B. 0 9 * * * oder taeglich 09:00">
+      <label>Prompt / Befehl</label>
+      <textarea id="schedule-prompt" rows="3" placeholder="Was soll der Agent tun?"></textarea>
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+        <input type="checkbox" id="schedule-active" checked> Aktiv
+      </label>
       <div class="modal-actions">
         <button class="btn" onclick="closeModal('schedule-modal')">Abbrechen</button>
-        <button class="btn btn-primary" onclick="submitSchedule()">Erstellen</button>
+        <button class="btn btn-primary" onclick="saveSchedule()">Speichern</button>
       </div>
     </div>
   </div>

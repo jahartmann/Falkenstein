@@ -11,7 +11,8 @@ let tasksOffset = 0;
 const TASKS_LIMIT = 50;
 const activityLog = [];
 let _searchTimer = null;
-let currentMemTab = 'short';
+let currentMemTab = 'all';
+let _allMemories = [];
 let taskViewMode = 'table';
 
 // ============================================
@@ -724,15 +725,17 @@ async function loadSchedules() {
         <div class="card-header">
           <div style="display:flex;align-items:center;gap:8px">
             <div class="status-dot ${s.active ? 'online' : ''}"></div>
-            ${esc(s.task || s.description || 'Schedule')}
+            ${esc(s.name || s.task || s.description || 'Schedule')}
           </div>
           ${badge(s.active ? 'active' : 'inactive')}
         </div>
-        <div style="font-size:13px;color:var(--text-muted)">Cron: <code>${esc(s.cron || '')}</code></div>
+        <div style="font-size:13px;color:var(--text-muted)">Zeitplan: <code>${esc(s.schedule || s.cron || '')}</code></div>
+        ${s.prompt ? `<div style="font-size:12px;color:var(--text-muted);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(s.prompt)}">${esc(s.prompt.length > 80 ? s.prompt.slice(0, 80) + '…' : s.prompt)}</div>` : ''}
         ${s.next_run ? `<div style="font-size:12px;color:var(--text-muted);margin-top:4px">Naechste: ${relTimeFuture(s.next_run)}</div>` : ''}
         ${s.last_run ? `<div style="font-size:12px;color:var(--text-muted)">Letzte: ${relTime(s.last_run)}</div>` : ''}
-        <div class="mt-16" style="display:flex;gap:6px">
+        <div class="mt-16" style="display:flex;gap:6px;flex-wrap:wrap">
           <button class="btn btn-sm btn-primary" onclick="runSchedule('${esc(s.id)}')">Jetzt ausfuehren</button>
+          <button class="btn btn-sm" onclick="editSchedule(${s.id})">Bearbeiten</button>
           <button class="btn btn-sm" onclick="toggleSchedule('${esc(s.id)}')">${s.active ? 'Pausieren' : 'Aktivieren'}</button>
           <button class="btn btn-sm btn-danger" onclick="deleteSchedule('${esc(s.id)}')">Loeschen</button>
         </div>
@@ -768,19 +771,55 @@ async function deleteSchedule(id) {
   } catch (e) { showToast('Fehler: ' + e.message); }
 }
 
-async function submitSchedule() {
-  const task = document.getElementById('schedule-modal-task')?.value?.trim();
-  const cron = document.getElementById('schedule-modal-cron')?.value?.trim();
-  if (!task || !cron) { showToast('Felder ausfuellen'); return; }
+// Holds the ID when editing an existing schedule (null = create mode)
+let _editScheduleId = null;
+
+function openScheduleModal() {
+  _editScheduleId = null;
+  document.getElementById('schedule-modal-title').textContent = 'Neuen Schedule erstellen';
+  document.getElementById('schedule-name').value = '';
+  document.getElementById('schedule-cron').value = '';
+  document.getElementById('schedule-prompt').value = '';
+  document.getElementById('schedule-active').checked = true;
+  openModal('schedule-modal');
+}
+
+async function editSchedule(id) {
   try {
-    await api('/schedules', {
-      method: 'POST',
-      body: JSON.stringify({ task, cron }),
-    });
-    showToast('Schedule erstellt');
+    const s = await api('/schedules/' + id);
+    if (s.error) { showToast('Fehler: ' + s.error); return; }
+    _editScheduleId = id;
+    document.getElementById('schedule-modal-title').textContent = 'Schedule bearbeiten';
+    document.getElementById('schedule-name').value = s.name || '';
+    document.getElementById('schedule-cron').value = s.schedule || s.cron || '';
+    document.getElementById('schedule-prompt').value = s.prompt || '';
+    document.getElementById('schedule-active').checked = !!s.active;
+    openModal('schedule-modal');
+  } catch (e) { showToast('Fehler: ' + e.message); }
+}
+
+async function saveSchedule() {
+  const name = document.getElementById('schedule-name')?.value?.trim();
+  const schedule = document.getElementById('schedule-cron')?.value?.trim();
+  const prompt = document.getElementById('schedule-prompt')?.value?.trim();
+  const active = document.getElementById('schedule-active')?.checked ?? true;
+  if (!name || !schedule || !prompt) { showToast('Bitte Name, Zeitplan und Prompt ausfuellen'); return; }
+  try {
+    if (_editScheduleId !== null) {
+      await api('/schedules/' + _editScheduleId, {
+        method: 'PUT',
+        body: JSON.stringify({ name, schedule, prompt, active }),
+      });
+      showToast('Schedule gespeichert');
+    } else {
+      await api('/schedules', {
+        method: 'POST',
+        body: JSON.stringify({ name, schedule, prompt, active }),
+      });
+      showToast('Schedule erstellt');
+    }
     closeModal('schedule-modal');
-    document.getElementById('schedule-modal-task').value = '';
-    document.getElementById('schedule-modal-cron').value = '';
+    _editScheduleId = null;
     loadSchedules();
   } catch (e) { showToast('Fehler: ' + e.message); }
 }
@@ -1137,7 +1176,7 @@ const COMMANDS = [
   { name: 'Einstellungen', key: 'settings', shortcut: '0', action: () => navigateTo('settings') },
   { name: 'Theme wechseln', key: 'theme', action: toggleTheme },
   { name: 'Neuer Task', key: 'newtask', action: () => openModal('task-modal') },
-  { name: 'Neuer Schedule', key: 'newschedule', action: () => openModal('schedule-modal') },
+  { name: 'Neuer Schedule', key: 'newschedule', action: () => openScheduleModal() },
   { name: 'Pixel-Buero oeffnen', key: 'pixelbuero', action: () => window.open('/static/office.html', '_blank') },
 ];
 
