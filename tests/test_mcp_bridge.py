@@ -1,5 +1,6 @@
 """Tests for MCPBridge — server lifecycle and tool execution."""
 from __future__ import annotations
+import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from backend.mcp.bridge import MCPBridge
@@ -26,17 +27,24 @@ def test_bridge_servers_property(bridge):
     assert servers[0].config.id == "test-server"
 
 @pytest.mark.asyncio
-async def test_bridge_start_updates_registry(bridge):
-    with patch.object(bridge, "_start_server", new_callable=AsyncMock) as mock_start:
+async def test_bridge_start_launches_server(bridge):
+    from backend.mcp.bridge import DEFAULT_START_TIMEOUT
+    with patch.object(bridge, "_launch_server", new_callable=AsyncMock) as mock_launch:
         await bridge.start()
-        mock_start.assert_called_once_with("test-server")
+        mock_launch.assert_called_once_with("test-server", DEFAULT_START_TIMEOUT)
 
 @pytest.mark.asyncio
 async def test_bridge_stop(bridge):
-    with patch.object(bridge, "_stop_server", new_callable=AsyncMock) as mock_stop:
-        bridge._sessions["test-server"] = MagicMock()
-        await bridge.stop()
-        mock_stop.assert_called_once_with("test-server")
+    # Simulate a running server task
+    evt = asyncio.Event()
+    async def fake_task():
+        await evt.wait()
+    task = asyncio.create_task(fake_task())
+    bridge._tasks["test-server"] = task
+    bridge._sessions["test-server"] = MagicMock()
+    await bridge.stop()
+    assert len(bridge._tasks) == 0
+    assert len(bridge._sessions) == 0
 
 @pytest.mark.asyncio
 async def test_bridge_list_tools_no_session(bridge):
@@ -51,28 +59,26 @@ async def test_bridge_call_tool_no_session(bridge):
 
 @pytest.mark.asyncio
 async def test_bridge_restart_server(bridge):
-    with patch.object(bridge, "_stop_server", new_callable=AsyncMock) as mock_stop, \
-         patch.object(bridge, "_start_server", new_callable=AsyncMock) as mock_start:
+    with patch.object(bridge, "_stop_single", new_callable=AsyncMock) as mock_stop, \
+         patch.object(bridge, "_launch_server", new_callable=AsyncMock) as mock_launch:
         await bridge.restart_server("test-server")
         mock_stop.assert_called_once_with("test-server")
-        mock_start.assert_called_once_with("test-server")
+        mock_launch.assert_called_once()
 
 @pytest.mark.asyncio
 async def test_bridge_toggle_server(bridge):
-    with patch.object(bridge, "_stop_server", new_callable=AsyncMock) as mock_stop:
+    with patch.object(bridge, "_stop_single", new_callable=AsyncMock) as mock_stop:
         await bridge.toggle_server("test-server", False)
         assert bridge.registry.get("test-server").config.enabled is False
         mock_stop.assert_called_once()
 
 @pytest.mark.asyncio
 async def test_bridge_discover_tools_aggregates(bridge):
-    mock_tool = MagicMock(name="test_tool", description="A test", inputSchema={"type": "object"})
-    mock_tool.name = "test_tool"
-    mock_tool.description = "A test"
-    mock_tool.inputSchema = {"type": "object"}
-    mock_session = AsyncMock()
-    mock_session.list_tools.return_value = MagicMock(tools=[mock_tool])
-    bridge._sessions["test-server"] = mock_session
+    from backend.mcp.config import ToolSchema
+    bridge._sessions["test-server"] = MagicMock()
+    bridge._tool_cache["test-server"] = [
+        ToolSchema(name="test_tool", description="A test", server_id="test-server", input_schema={"type": "object"})
+    ]
     bridge.registry.update_status("test-server", status="running")
     tools = await bridge.discover_tools()
     assert len(tools) == 1
