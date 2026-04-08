@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import time as _time
 from pathlib import Path
 from contextlib import asynccontextmanager
@@ -40,6 +41,9 @@ from backend.tools.self_config import SelfConfigTool
 from backend.tools.ops_executor import OpsExecutor
 from backend.memory.fact_memory import FactMemory
 from backend.system_monitor import SystemMonitor
+from backend.mcp import MCPBridge, MCPRegistry, create_all_mcp_tools
+
+log = logging.getLogger(__name__)
 
 db: Database = None
 fact_memory: FactMemory = None
@@ -189,6 +193,23 @@ async def lifespan(app: FastAPI):
         db=db,
     )
 
+    # ── MCP Bridge ────────────────────────────────────────────────────
+    mcp_registry = MCPRegistry.from_settings(
+        server_ids=settings.mcp_servers,
+        enabled_flags={
+            "apple-mcp": settings.mcp_apple_enabled,
+            "desktop-commander": settings.mcp_desktop_commander_enabled,
+            "mcp-obsidian": settings.mcp_obsidian_enabled,
+        },
+        node_path=settings.mcp_node_path,
+    )
+    mcp_bridge = MCPBridge(mcp_registry)
+    try:
+        await mcp_bridge.start()
+        log.info("MCP Bridge started with %d servers", len(mcp_registry.list_enabled()))
+    except Exception as e:
+        log.warning("MCP Bridge start failed (non-fatal): %s", e)
+
     # CrewAI Tool instances (wrappers around existing tool executors)
     code_exec_tool = CrewCodeExecutorTool()
     shell_tool = CrewShellRunnerTool()
@@ -211,6 +232,26 @@ async def lifespan(app: FastAPI):
         "premium": [],
     }
 
+    # ── MCP Tools for CrewAI ──────────────────────────────────────────
+    try:
+        mcp_tool_schemas = await mcp_bridge.discover_tools()
+        mcp_crewai_tools = create_all_mcp_tools(mcp_tool_schemas, mcp_bridge)
+
+        mcp_general_tools = [t for t in mcp_crewai_tools
+                             if any(k in t.name for k in ("reminder", "calendar", "event", "music", "homekit", "note"))]
+        mcp_desktop_tools = [t for t in mcp_crewai_tools if "desktop" in t.name]
+        mcp_obsidian_tools = [t for t in mcp_crewai_tools if "obsidian" in t.name]
+
+        for crew_type in crew_tools:
+            crew_tools[crew_type] = crew_tools[crew_type] + mcp_general_tools
+        crew_tools["ops"] = crew_tools["ops"] + mcp_desktop_tools
+        crew_tools["coder"] = crew_tools["coder"] + mcp_desktop_tools
+        crew_tools["researcher"] = crew_tools["researcher"] + mcp_obsidian_tools
+        crew_tools["writer"] = crew_tools["writer"] + mcp_obsidian_tools
+        log.info("Added %d MCP tools to crews", len(mcp_crewai_tools))
+    except Exception as e:
+        log.warning("MCP tool discovery failed (non-fatal): %s", e)
+
     # FalkensteinFlow
     flow = FalkensteinFlow(
         event_bus=event_bus,
@@ -218,6 +259,7 @@ async def lifespan(app: FastAPI):
         vault_index=vault_index,
         settings=settings,
         tools=crew_tools,
+        mcp_bridge=mcp_bridge,
     )
 
     app.state.flow = flow
@@ -229,6 +271,7 @@ async def lifespan(app: FastAPI):
         flow=flow,
         fact_memory=fact_memory,
         soul_memory=soul_memory, system_monitor=system_monitor,
+        mcp_bridge=mcp_bridge,
     )
     admin_api.init(start_time=_time.time())
 
@@ -272,6 +315,7 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown
+    await mcp_bridge.stop()
     if telegram_task:
         telegram_task.cancel()
         try:
