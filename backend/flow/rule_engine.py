@@ -36,12 +36,19 @@ CREW_PRIORITY = ["web_design", "swift", "ki_expert", "analyst", "ops", "research
 MCP_KEYWORDS = {
     "erinner", "reminder", "erinnerung",
     "licht", "light", "lampe",
-    "musik", "music", "spiel", "play", "pause", "stop",
-    "kalender", "calendar", "termin", "event",
-    "notiz", "note",
+    "musik", "music", "pause",
+    "kalender", "calendar", "termin",
     "homekit", "smart home", "heizung", "thermostat",
     "timer", "wecker", "alarm",
 }
+
+# Word-boundary patterns: leading \b ensures we don't match mid-word
+# (e.g. "Beispiel" won't match "spiel"), but no trailing \b so German
+# stems like "erinner" still match "Erinnere", "Erinnerung" etc.
+_MCP_WORD_PATTERNS = [
+    re.compile(r"\b" + re.escape(kw), re.I)
+    for kw in MCP_KEYWORDS
+]
 
 
 class RuleEngine:
@@ -51,11 +58,11 @@ class RuleEngine:
         for pattern in QUICK_REPLY_PATTERNS:
             if pattern.search(text):
                 return RouteResult(action="quick_reply")
-        # 2. MCP keyword matching (before crew, after quick_reply)
-        text_lower = text.lower()
-        if any(kw in text_lower for kw in MCP_KEYWORDS):
+        # 2. MCP keyword matching with word boundaries (before crew, after quick_reply)
+        if any(pat.search(text) for pat in _MCP_WORD_PATTERNS):
             return RouteResult(action="direct_mcp", crew_type=None)
         # 3. Crew keyword matching
+        text_lower = text.lower()
         for crew_type in CREW_PRIORITY:
             for kw in CREW_KEYWORDS[crew_type]:
                 if kw in text_lower:

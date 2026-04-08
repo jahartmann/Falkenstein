@@ -86,7 +86,19 @@ class FalkensteinFlow:
 
     async def _handle_direct_mcp(self, message: str, chat_id: int | None = None) -> str:
         try:
-            mcp_intent = await self.ollama.classify_mcp(message)
+            # Pass discovered tools so the LLM knows what's available
+            tools_info = []
+            if self.mcp_bridge:
+                try:
+                    for schema in await self.mcp_bridge.discover_tools():
+                        tools_info.append({
+                            "server_id": schema.server_id,
+                            "tool_name": schema.name,
+                            "description": schema.description,
+                        })
+                except Exception:
+                    pass
+            mcp_intent = await self.ollama.classify_mcp(message, available_tools=tools_info)
             server_id = mcp_intent.get("server_id")
             tool_name = mcp_intent.get("tool_name")
             args = mcp_intent.get("args", {})

@@ -2,11 +2,26 @@
 from __future__ import annotations
 import asyncio
 import logging
+import threading
 from typing import Any
 from crewai.tools import BaseTool
 from backend.mcp.config import ToolSchema
 
 log = logging.getLogger(__name__)
+
+
+def _run_async(coro):
+    """Run an async coroutine from a sync context (e.g. CrewAI thread pool).
+
+    Creates a fresh event loop in the current thread to avoid conflicts
+    with the main asyncio loop.
+    """
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+
 
 def _make_tool_class(schema: ToolSchema, bridge: Any) -> type[BaseTool]:
     server_id = schema.server_id
@@ -19,11 +34,7 @@ def _make_tool_class(schema: ToolSchema, bridge: Any) -> type[BaseTool]:
         description: str = tool_desc
 
         def _run(self, **kwargs) -> str:
-            try:
-                result = asyncio.run(bridge.call_tool(server_id, mcp_tool_name, kwargs))
-            except RuntimeError:
-                loop = asyncio.get_event_loop()
-                result = loop.run_until_complete(bridge.call_tool(server_id, mcp_tool_name, kwargs))
+            result = _run_async(bridge.call_tool(server_id, mcp_tool_name, kwargs))
             if result.success:
                 return result.output
             return f"Error: {result.output}"

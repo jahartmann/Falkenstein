@@ -89,8 +89,8 @@ async def handle_telegram_message(msg: dict):
             if transcribed:
                 full_text = f"{text} {transcribed}".strip() if text else transcribed
                 result = await flow.handle_message(full_text, chat_id=chat_id)
-                # quick_reply results aren't sent by EventBus
-                if flow.rule_engine.route(full_text).action == "quick_reply":
+                # quick_reply and direct_mcp results aren't sent by EventBus
+                if flow.rule_engine.route(full_text).action in ("quick_reply", "direct_mcp"):
                     await _send_result(result)
             else:
                 if telegram and telegram.enabled:
@@ -107,10 +107,10 @@ async def handle_telegram_message(msg: dict):
 
         # Regular text
         if text:
-            # Check if this will be a quick_reply (no EventBus involvement)
+            # Check if this will be a quick_reply or direct_mcp (no EventBus involvement)
             route = flow.rule_engine.route(text)
             result = await flow.handle_message(text, chat_id=chat_id)
-            if route.action == "quick_reply":
+            if route.action in ("quick_reply", "direct_mcp"):
                 await _send_result(result)
 
     except Exception as e:

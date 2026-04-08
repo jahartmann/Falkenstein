@@ -102,8 +102,7 @@ async def get_dashboard():
     import httpx
 
     active = []
-    if _main_agent:
-        active = _main_agent.get_status().get("active_agents", [])
+    # FalkensteinFlow has no get_status(); active agents are tracked via EventBus
 
     open_count = 0
     recent = []
@@ -196,24 +195,18 @@ async def ai_create_schedule(data: ScheduleAICreate):
     if not _db or not _scheduler or not _flow:
         return {"error": "Not initialized"}
 
-    # LLM enrichment in parallel
-    meta, enriched = await asyncio.gather(
-        _main_agent._extract_schedule_meta(data.description),
-        _main_agent._enrich_prompt(data.description),
-    )
-
-    name = meta.get("name", "Neuer Task")
-    schedule = meta.get("schedule", "täglich 09:00")
-    agent_type = meta.get("agent", "researcher")
-    active_hours = meta.get("active_hours", None) or None
+    # Simple schedule creation from description (no LLM meta-extraction)
+    name = data.description[:60] or "Neuer Task"
+    schedule = "täglich 09:00"
+    agent_type = "researcher"
 
     new_id = await _db.create_schedule(
         name=name,
         schedule=schedule,
         agent_type=agent_type,
-        prompt=enriched,
+        prompt=data.description,
         active=1,
-        active_hours=active_hours,
+        active_hours=None,
     )
     await _scheduler.reload_tasks()
 
@@ -223,7 +216,7 @@ async def ai_create_schedule(data: ScheduleAICreate):
         "name": name,
         "schedule": schedule,
         "agent_type": agent_type,
-        "prompt": enriched,
+        "prompt": data.description,
     }
 
 
@@ -406,8 +399,8 @@ async def create_task_with_deps(data: TaskCreate):
     )
     task_id = await _db.create_task(task)
     # If no dependencies, dispatch immediately
-    if not data.depends_on and _main_agent:
-        asyncio.create_task(_main_agent.handle_message(data.description))
+    if not data.depends_on and _flow:
+        asyncio.create_task(_flow.handle_message(data.description))
     return {"task_id": task_id, "depends_on": data.depends_on}
 
 

@@ -98,22 +98,22 @@ Antworte NUR mit einem JSON-Objekt:
 Wenn kein Tool passt, antworte: {{"server_id": null, "tool_name": null, "args": {{}}}}"""
 
         try:
-            response = await self._http.post(
-                f"{self.host}/api/chat",
-                json={
-                    "model": self.model_light,
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": message},
-                    ],
-                    "stream": False,
-                    "format": "json",
-                    "options": {"num_ctx": self.num_ctx},
-                },
-                timeout=30,
-            )
-            content = response.json()["message"]["content"]
-            return json.loads(content)
+            async with httpx.AsyncClient(timeout=self.timeout) as http:
+                response = await http.post(
+                    f"{self.host}/api/chat",
+                    json={
+                        "model": self.model_light,
+                        "messages": [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": message},
+                        ],
+                        "stream": False,
+                        "format": "json",
+                        "keep_alive": self.keep_alive,
+                    },
+                )
+                content = response.json()["message"]["content"]
+                return json.loads(content)
         except (json.JSONDecodeError, KeyError, Exception):
             return {"server_id": None, "tool_name": None, "args": {}}
 
