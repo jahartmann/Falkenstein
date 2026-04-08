@@ -78,6 +78,45 @@ class NativeOllamaClient:
             r.raise_for_status()
             return r.json()
 
+    async def classify_mcp(self, message: str, available_tools: list[dict] | None = None) -> dict:
+        """Classify a message as an MCP tool call. Returns {server_id, tool_name, args}."""
+        tools_desc = ""
+        if available_tools:
+            tools_desc = "\n".join(
+                f"- {t['server_id']}/{t['tool_name']}: {t.get('description', '')}"
+                for t in available_tools
+            )
+
+        system_prompt = f"""Du bist ein Tool-Router. Analysiere die Nachricht und entscheide welches Tool aufgerufen werden soll.
+
+Verfügbare Tools:
+{tools_desc}
+
+Antworte NUR mit einem JSON-Objekt:
+{{"server_id": "...", "tool_name": "...", "args": {{...}}}}
+
+Wenn kein Tool passt, antworte: {{"server_id": null, "tool_name": null, "args": {{}}}}"""
+
+        try:
+            response = await self._http.post(
+                f"{self.host}/api/chat",
+                json={
+                    "model": self.model_light,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": message},
+                    ],
+                    "stream": False,
+                    "format": "json",
+                    "options": {"num_ctx": self.num_ctx},
+                },
+                timeout=30,
+            )
+            content = response.json()["message"]["content"]
+            return json.loads(content)
+        except (json.JSONDecodeError, KeyError, Exception):
+            return {"server_id": None, "tool_name": None, "args": {}}
+
     async def _chat(self, model: str, messages: list[dict],
                     format: dict | None = None,
                     think: bool | None = None) -> str:
