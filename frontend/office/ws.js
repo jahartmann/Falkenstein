@@ -121,14 +121,17 @@ export class OfficeWS {
       case 'agent_progress':
         this.am.updateAgentStatus(msg.agent_id, msg.label || msg.tool || '');
         this.bm.showBubble(msg.agent_id, msg.label || `\uD83D\uDD27 ${msg.tool || '...'}`);
+        addFeedEntry('📊', msg.label || msg.tool_name || 'Progress');
         break;
 
       case 'task_created':
         this._refreshTaskCount();
+        addFeedEntry('📋', 'Neue Aufgabe');
         break;
 
       case 'schedule_fired':
         this._refreshScheduleCount();
+        addFeedEntry('⏰', 'Schedule ausgeführt');
         break;
 
       case 'state_update':

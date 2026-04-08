@@ -296,6 +296,15 @@ async function loadDashboard() {
     renderActivity();
   } catch (e) { console.error('Dashboard load error:', e); }
 
+  // Update Ollama dot from /health
+  try {
+    const health = await api('/health');
+    const ollamaDot = document.getElementById('ollama-dot');
+    if (ollamaDot) {
+      ollamaDot.classList.toggle('online', (health.ollama?.status || '') === 'online');
+    }
+  } catch (_) {}
+
   loadDashboardSchedules();
   loadDashboardMCP();
   loadDashboardSystem();
@@ -343,11 +352,7 @@ async function loadDashboardMCP() {
       el.innerHTML = '<span class="text-muted">Keine MCP Server</span>';
     }
     // Ollama dot
-    const ollamaDot = document.getElementById('ollama-dot');
-    if (ollamaDot) {
-      const hasOllama = servers.some(s => (s.name || '').toLowerCase().includes('ollama'));
-      ollamaDot.classList.toggle('online', hasOllama);
-    }
+    // Ollama dot is updated via /health in loadDashboard, not MCP servers
   } catch (e) {
     document.getElementById('dash-mcp').innerHTML = '<span class="text-muted">MCP nicht erreichbar</span>';
   }
@@ -678,8 +683,8 @@ async function restartMCPServer(serverId) {
 
 async function toggleMCPServer(serverId, enabled) {
   try {
-    await api('/mcp/servers/' + encodeURIComponent(serverId), {
-      method: 'PATCH',
+    await api('/mcp/servers/' + encodeURIComponent(serverId) + '/toggle', {
+      method: 'POST',
       body: JSON.stringify({ enabled }),
     });
     showToast(enabled ? 'Server aktiviert' : 'Server deaktiviert');
@@ -833,7 +838,7 @@ async function deleteMemory(id) {
 
 async function loadObsidian() {
   try {
-    const data = await api('/obsidian/notes?limit=50');
+    const data = await api('/obsidian/recent?limit=50');
     const notes = data.notes || data || [];
     const el = document.getElementById('obsidian-list');
     if (Array.isArray(notes) && notes.length > 0) {
@@ -855,7 +860,7 @@ async function loadObsidian() {
 async function openNote(path) {
   if (!path) return;
   try {
-    const data = await api('/obsidian/notes/' + encodeURIComponent(path));
+    const data = await api('/obsidian/note?path=' + encodeURIComponent(path));
     document.getElementById('obsidian-note-title').textContent = data.name || data.title || path;
     document.getElementById('obsidian-viewer').textContent = data.content || data.text || '';
   } catch (e) {
@@ -895,7 +900,7 @@ async function loadSystem() {
 
     // Ollama models
     try {
-      const mData = await api('/system/models');
+      const mData = await api('/ollama/models');
       const models = mData.models || mData || [];
       const modelsEl = document.getElementById('system-models');
       if (Array.isArray(models) && models.length > 0) {
@@ -912,15 +917,16 @@ async function loadSystem() {
       document.getElementById('system-models').innerHTML = '<span class="text-muted">Ollama nicht erreichbar</span>';
     }
 
-    // DB stats
+    // DB stats — fetched from /health endpoint
     try {
-      const dbData = await api('/system/db-stats');
+      const healthData = await api('/health');
+      const dbStats = healthData.db_stats || {};
       const dbEl = document.getElementById('system-db');
       dbEl.innerHTML = `
-        <div class="activity-item"><span>Tasks</span><span class="activity-time">${dbData.tasks_count ?? '\u2014'}</span></div>
-        <div class="activity-item"><span>Messages</span><span class="activity-time">${dbData.messages_count ?? '\u2014'}</span></div>
-        <div class="activity-item"><span>Tool Logs</span><span class="activity-time">${dbData.tool_log_count ?? '\u2014'}</span></div>
-        <div class="activity-item"><span>DB Groesse</span><span class="activity-time">${dbData.size_mb ? dbData.size_mb.toFixed(1) + ' MB' : '\u2014'}</span></div>
+        <div class="activity-item"><span>Tasks</span><span class="activity-time">${dbStats.tasks ?? '\u2014'}</span></div>
+        <div class="activity-item"><span>Messages</span><span class="activity-time">${dbStats.messages ?? '\u2014'}</span></div>
+        <div class="activity-item"><span>Tool Logs</span><span class="activity-time">${dbStats.tool_log ?? '\u2014'}</span></div>
+        <div class="activity-item"><span>Schedules</span><span class="activity-time">${dbStats.schedules ?? '\u2014'}</span></div>
       `;
     } catch (_) {
       document.getElementById('system-db').innerHTML = '<span class="text-muted">DB Stats nicht verfuegbar</span>';
@@ -995,7 +1001,7 @@ async function saveConfigGroup(btn, group) {
   });
   try {
     await api('/config', {
-      method: 'PATCH',
+      method: 'PUT',
       body: JSON.stringify(updates),
     });
     showToast(group + ' gespeichert');

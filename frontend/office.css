@@ -116,7 +116,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: #1a1a2e; }
 
 /* Activity Feed */
 .office-activity-feed {
-  position: fixed; bottom: 16px; right: 16px; width: 250px; max-height: 200px;
+  position: fixed; bottom: 172px; /* 144px minimap height + 12px minimap bottom + 16px gap */ right: 16px; width: 250px; max-height: 200px;
   background: rgba(26, 26, 46, 0.85);
   border: 1px solid rgba(255,255,255,0.1);
   border-radius: 12px; padding: 10px 14px;
