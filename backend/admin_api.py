@@ -25,17 +25,20 @@ _llm_router = None
 _fact_memory = None
 _soul_memory = None
 _system_monitor = None
+_mcp_bridge = None
 
 
 def set_dependencies(db=None, scheduler=None, config_service=None,
                      main_agent=None, flow=None, budget_tracker=None, llm_router=None,
-                     fact_memory=None, soul_memory=None, system_monitor=None):
-    global _db, _scheduler, _config_service, _main_agent, _flow, _budget_tracker, _llm_router, _fact_memory, _soul_memory, _system_monitor
+                     fact_memory=None, soul_memory=None, system_monitor=None,
+                     mcp_bridge=None):
+    global _db, _scheduler, _config_service, _main_agent, _flow, _budget_tracker, _llm_router, _fact_memory, _soul_memory, _system_monitor, _mcp_bridge
     _db = db; _scheduler = scheduler; _config_service = config_service
     _flow = flow; _main_agent = main_agent or flow  # Flow replaces MainAgent
     _budget_tracker = budget_tracker; _llm_router = llm_router
     _fact_memory = fact_memory; _soul_memory = soul_memory
     _system_monitor = system_monitor
+    _mcp_bridge = mcp_bridge
 
 
 def init(start_time: float):
@@ -972,3 +975,56 @@ async def update_server():
             pass  # Client disconnected — subprocess already cleaned up by _run_cmd
 
     return StreamingResponse(stream_update(), media_type="text/event-stream")
+
+
+# ── MCP Server Management ──────────────────────────────────────────────────
+
+@router.get("/mcp/servers")
+async def list_mcp_servers():
+    if _mcp_bridge is None:
+        return []
+    return [
+        {
+            "id": s.config.id,
+            "name": s.config.name,
+            "enabled": s.config.enabled,
+            "status": s.status,
+            "pid": s.pid,
+            "tools_count": s.tools_count,
+            "last_call": str(s.last_call) if s.last_call else None,
+            "uptime_seconds": s.uptime_seconds,
+            "last_error": s.last_error,
+        }
+        for s in _mcp_bridge.servers
+    ]
+
+@router.get("/mcp/servers/{server_id}/tools")
+async def get_mcp_server_tools(server_id: str):
+    if _mcp_bridge is None:
+        return []
+    tools = await _mcp_bridge.list_tools(server_id)
+    return [
+        {"name": t.name, "description": t.description, "input_schema": t.input_schema}
+        for t in tools
+    ]
+
+@router.post("/mcp/servers/{server_id}/restart")
+async def restart_mcp_server(server_id: str):
+    if _mcp_bridge is None:
+        return {"error": "MCP not initialized"}
+    await _mcp_bridge.restart_server(server_id)
+    return {"status": "restarted", "server_id": server_id}
+
+@router.post("/mcp/servers/{server_id}/toggle")
+async def toggle_mcp_server(server_id: str, body: dict):
+    if _mcp_bridge is None:
+        return {"error": "MCP not initialized"}
+    enabled = body.get("enabled", True)
+    await _mcp_bridge.toggle_server(server_id, enabled)
+    return {"status": "toggled", "server_id": server_id, "enabled": enabled}
+
+@router.get("/mcp/servers/{server_id}/logs")
+async def get_mcp_server_logs(server_id: str, limit: int = 50):
+    if _db is None:
+        return []
+    return await _db.get_mcp_calls(limit=limit, server_id=server_id)
