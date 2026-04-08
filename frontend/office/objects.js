@@ -82,7 +82,7 @@ export class ObjectManager {
     const nearAgent = this.am.getAgentNear(playerWorld.x, playerWorld.y, INTERACT_RADIUS * 48);
     if (nearAgent && (!this.nearestObject || bestDist > 1)) {
       this.nearestObject = {
-        name: `Monitor: ${nearAgent.type}`,
+        name: `Monitor: ${nearAgent.name || nearAgent.type || 'Agent'}`,
         type: 'monitor',
         onInteract: () => this._openMonitor(nearAgent)
       };

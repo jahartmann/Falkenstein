@@ -16,16 +16,17 @@ class MusicPlayer {
     this.genres = {
       lofi:      { label: 'Lofi Beats',      tracks: ['/static/music/lofi_1.mp3', '/static/music/lofi_2.mp3'] },
       jazz:      { label: 'Jazz Vibes',       tracks: ['/static/music/jazz_1.mp3', '/static/music/jazz_2.mp3'] },
-      ambient:   { label: 'Ambient Pads',     tracks: ['/static/music/ambient_1.mp3', '/static/music/ambient_2.mp3'] },
-      classical: { label: 'Classical Focus',  tracks: ['/static/music/classical_1.mp3', '/static/music/classical_2.mp3'] },
+      ambient:   { label: 'Ambient Waves',    tracks: ['/static/music/ambient_1.mp3', '/static/music/ambient_2.mp3'] },
+      classical: { label: 'Classical Piano',  tracks: ['/static/music/classical_1.mp3', '/static/music/classical_2.mp3'] },
     };
 
     // Ambient pad config per genre (used when mp3 not found)
+    // freqs: distinct chord per genre, detune in cents, lfoRate: LFO Hz (0 = no LFO)
     this.padConfig = {
-      lofi:      { freqs: [110, 165, 220, 277.18], detune: 12, gain: 0.08 },
-      jazz:      { freqs: [138.59, 174.61, 220, 293.66], detune: 8, gain: 0.07 },
-      ambient:   { freqs: [55, 82.41, 110, 130.81], detune: 20, gain: 0.06 },
-      classical: { freqs: [130.81, 164.81, 196, 246.94], detune: 5, gain: 0.07 },
+      lofi:      { freqs: [130.81, 164.81, 196, 246.94], detune: 12, gain: 0.08, lfoRate: 0.05 },
+      jazz:      { freqs: [146.83, 174.61, 220, 261.63], detune: 8,  gain: 0.07, lfoRate: 0.12 },
+      ambient:   { freqs: [65.41, 98, 130.81],           detune: 20, gain: 0.06, lfoRate: 0.02 },
+      classical: { freqs: [261.63, 329.63, 392, 523.25], detune: 2,  gain: 0.07, lfoRate: 0 },
     };
   }
 
@@ -100,23 +101,25 @@ class MusicPlayer {
       osc.frequency.value = freq;
       osc.detune.value = detune;
 
-      // Slow LFO tremolo
-      const lfo = ctx.createOscillator();
-      const lfoGain = ctx.createGain();
-      lfo.type = 'sine';
-      lfo.frequency.value = 0.08 + i * 0.03;
-      lfoGain.gain.value = cfg.gain * 0.3;
-      lfo.connect(lfoGain);
-      lfoGain.connect(gainNode.gain);
-
       gainNode.gain.value = cfg.gain * this.volume;
       osc.connect(gainNode);
       gainNode.connect(ctx.destination);
 
       osc.start();
-      lfo.start();
+      this.generatorNodes.push(osc, gainNode);
 
-      this.generatorNodes.push(osc, lfo, gainNode, lfoGain);
+      // Slow LFO tremolo — skip for genres with lfoRate === 0 (e.g. classical)
+      if (cfg.lfoRate > 0) {
+        const lfo = ctx.createOscillator();
+        const lfoGain = ctx.createGain();
+        lfo.type = 'sine';
+        lfo.frequency.value = cfg.lfoRate + i * 0.01;
+        lfoGain.gain.value = cfg.gain * 0.3;
+        lfo.connect(lfoGain);
+        lfoGain.connect(gainNode.gain);
+        lfo.start();
+        this.generatorNodes.push(lfo, lfoGain);
+      }
     });
 
     this.isPlaying = true;
