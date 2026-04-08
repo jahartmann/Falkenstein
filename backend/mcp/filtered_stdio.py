@@ -9,11 +9,19 @@ from typing import TextIO
 import anyio
 import anyio.lowlevel
 from anyio.streams.text import TextReceiveStream
+from dataclasses import dataclass, field
 from mcp import types
 from mcp.client.stdio import StdioServerParameters
-from mcp.shared.message import SessionMessage
 
 log = logging.getLogger(__name__)
+
+try:
+    from mcp.shared.message import SessionMessage
+except ImportError:
+    @dataclass
+    class SessionMessage:
+        message: types.JSONRPCMessage
+        metadata: object = None
 
 # Timeout before force-killing the process
 PROCESS_TERMINATION_TIMEOUT = 2.0
