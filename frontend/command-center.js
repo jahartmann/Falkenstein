@@ -1009,6 +1009,23 @@ async function loadConfig() {
         <button class="btn btn-sm btn-primary mt-16" onclick="saveConfigGroup(this, '${esc(group)}')">Speichern</button>
       </div>`;
     }).join('');
+
+    // Server-Verwaltung: Update + Neustart
+    container.innerHTML += `
+      <div class="config-group" style="margin-top:24px">
+        <h4>Server-Verwaltung</h4>
+        <div style="display:flex;gap:12px;flex-wrap:wrap">
+          <button class="btn btn-primary" onclick="runUpdate()">
+            Git Pull + Update
+          </button>
+          <button class="btn btn-danger" onclick="restartServer()">
+            Server neustarten
+          </button>
+        </div>
+        <div id="update-output" style="display:none;margin-top:12px">
+          <pre style="background:var(--bg-tertiary);padding:12px;border-radius:var(--radius);font-size:12px;max-height:300px;overflow-y:auto;white-space:pre-wrap"></pre>
+        </div>
+      </div>`;
   } catch (e) {
     document.getElementById('config-container').innerHTML = '<span class="text-muted">Konfiguration nicht ladbar</span>';
     console.error('Config load error:', e);
@@ -1028,6 +1045,49 @@ async function saveConfigGroup(btn, group) {
     });
     showToast(group + ' gespeichert');
   } catch (e) { showToast('Fehler: ' + e.message); }
+}
+
+async function runUpdate() {
+  const output = document.getElementById('update-output');
+  const pre = output.querySelector('pre');
+  output.style.display = 'block';
+  pre.textContent = 'Update wird gestartet...\n';
+  try {
+    const resp = await fetch(API + '/update', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + localStorage.getItem('falkenstein_token') },
+    });
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      pre.textContent += decoder.decode(value);
+      pre.scrollTop = pre.scrollHeight;
+    }
+    pre.textContent += '\n--- Update abgeschlossen ---\n';
+    showToast('Update abgeschlossen — Server startet neu...');
+    setTimeout(() => location.reload(), 5000);
+  } catch (e) {
+    pre.textContent += '\nFehler: ' + e.message;
+    showToast('Update fehlgeschlagen');
+  }
+}
+
+function restartServer() {
+  if (!confirm('Server wirklich neustarten?')) return;
+  fetch(API + '/restart', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + localStorage.getItem('falkenstein_token') },
+  }).then(() => {
+    showToast('Server startet neu...');
+    // Countdown overlay
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.8);display:flex;align-items:center;justify-content:center;z-index:9999;color:white;font-size:24px;font-family:monospace';
+    overlay.textContent = 'Neustart... Seite lädt in 5s neu';
+    document.body.appendChild(overlay);
+    setTimeout(() => location.reload(), 5000);
+  }).catch(e => showToast('Fehler: ' + e.message));
 }
 
 // ============================================
