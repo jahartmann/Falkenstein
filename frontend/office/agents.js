@@ -58,12 +58,35 @@ const NPC_EMPLOYEES = [
 const WALK_SPEED = 400; // ms per tile
 const PAUSE_ROOMS = ['Küche', 'Lounge', 'Gemeinschaftsraum'];
 
+// Weighted break activities for NPCs
+const BREAK_ACTIVITIES = [
+  { type: 'coffee',     weight: 3 },
+  { type: 'chat',       weight: 2 },
+  { type: 'stretch',    weight: 4 },
+  { type: 'whiteboard', weight: 1 },
+  { type: 'wander',     weight: 2 },
+  { type: 'phone',      weight: 1 },
+];
+
+// Random idle thoughts shown in speech bubbles
+const NPC_THOUGHTS = [
+  'Hmm...', 'Interessant...', 'Fast fertig...',
+  'Kurze Pause...', 'Noch ein Task...', 'Läuft gut!',
+  'Coffee time ☕', 'Fokus...', 'Check!',
+  'Fast da...', 'Gute Idee!', '...',
+];
+
 export class AgentManager {
   constructor(scene, tilemapManager) {
     this.scene = scene;
     this.tm = tilemapManager;
     this.agents = new Map();
     this.occupiedTiles = new Set();
+    this.bubbleManager = null; // set via setBubbleManager() after creation
+  }
+
+  setBubbleManager(bm) {
+    this.bubbleManager = bm;
   }
 
   create() {
@@ -155,6 +178,7 @@ export class AgentManager {
       state: 'walking_to_desk',
       path: null, pathIndex: 0, tweenActive: false,
       pauseTimer: null, breakCount: 0,
+      thoughtTimer: null,
       isNPC: true,
     };
 
@@ -264,13 +288,35 @@ export class AgentManager {
   _sitDown(agent) {
     agent.state = 'working';
     agent.sprite.anims.play(`${agent.spriteName}_sit`, true);
+    // Occasionally show a "back to work" bubble
+    if (agent.isNPC && Math.random() < 0.3) {
+      const lines = ['Los geht\'s!', 'Back to work', 'Weiter...', 'Ok, los!'];
+      this._showBubble(agent, lines[Math.floor(Math.random() * lines.length)], 2500);
+    }
     this._schedulePause(agent);
+    if (agent.isNPC) this._scheduleRandomThought(agent);
   }
 
   _schedulePause(agent) {
     if (agent.state !== 'working') return;
-    const minDelay = agent.isNPC ? 12000 : 25000;
-    const extraDelay = agent.isNPC ? 18000 : 20000;
+    let minDelay, extraDelay;
+    if (agent.isNPC) {
+      const hour = this._getSimHour();
+      if (hour >= 8 && hour < 12) {
+        // Morning: focused, longer gaps
+        minDelay = 20000; extraDelay = 20000;
+      } else if (hour >= 12 && hour < 14) {
+        // Lunch: frequent short breaks
+        minDelay = 8000; extraDelay = 17000;
+      } else if (hour >= 17) {
+        // Evening: winding down
+        minDelay = 5000; extraDelay = 10000;
+      } else {
+        minDelay = 12000; extraDelay = 18000;
+      }
+    } else {
+      minDelay = 25000; extraDelay = 20000;
+    }
     const delay = minDelay + Math.random() * extraDelay;
     agent.pauseTimer = setTimeout(() => {
       if (agent.state !== 'working') return;
@@ -278,13 +324,45 @@ export class AgentManager {
     }, delay);
   }
 
+  _getSimHour() {
+    // Map real time of day to a simulated office hour (8:00-22:00 range)
+    return new Date().getHours();
+  }
+
+  _chooseBreakActivity() {
+    const total = BREAK_ACTIVITIES.reduce((s, a) => s + a.weight, 0);
+    let r = Math.random() * total;
+    for (const a of BREAK_ACTIVITIES) {
+      r -= a.weight;
+      if (r <= 0) return a.type;
+    }
+    return 'stretch';
+  }
+
   _goOnBreak(agent) {
     agent.state = 'on_break';
     agent.breakCount++;
+    // Cancel random-thought timer while on break
+    if (agent.thoughtTimer) { clearTimeout(agent.thoughtTimer); agent.thoughtTimer = null; }
 
-    // Every 3rd break: phone call at desk
-    if (agent.breakCount % 3 === 0) {
+    const activity = this._chooseBreakActivity();
+
+    if (activity === 'stretch') {
+      // Stand and stretch at desk — no walking
+      agent.sprite.anims.play(`${agent.spriteName}_idle_down`, true);
+      this._showBubble(agent, 'Kurze Pause...', 3000);
+      const dur = 3000 + Math.random() * 2000;
+      setTimeout(() => {
+        if (agent.state !== 'on_break') return;
+        this._sitDown(agent);
+      }, dur);
+      return;
+    }
+
+    if (activity === 'phone') {
+      // Phone call at desk
       agent.sprite.anims.play(`${agent.spriteName}_phone`, true);
+      this._showBubble(agent, 'Moment bitte...', 4000);
       setTimeout(() => {
         if (agent.state !== 'on_break') return;
         this._sitDown(agent);
@@ -292,12 +370,90 @@ export class AgentManager {
       return;
     }
 
-    // Walk to a break room
+    if (activity === 'chat') {
+      // Walk to a colleague's desk and chat
+      const colleague = this._findNearbyColleague(agent);
+      if (colleague) {
+        const offX = Math.floor(Math.random() * 3) - 1;
+        const offY = Math.floor(Math.random() * 3) - 1;
+        const tx = colleague.desk.tileX + offX;
+        const ty = colleague.desk.tileY + offY;
+        this._walkTo(agent, tx, ty, () => {
+          agent.sprite.anims.play(`${agent.spriteName}_idle_down`, true);
+          const chatLines = ['Kurze Frage...', 'Hast du kurz?', 'Hey!', 'Mal kurz...'];
+          this._showBubble(agent, chatLines[Math.floor(Math.random() * chatLines.length)], 5000);
+          // Colleague reacts
+          if (colleague.state === 'working') {
+            const replyLines = ['Klar!', 'Ja, kurz.', 'Gleich!'];
+            setTimeout(() => {
+              this._showBubble(colleague, replyLines[Math.floor(Math.random() * replyLines.length)], 3000);
+            }, 1200);
+          }
+          const idleDur = 8000 + Math.random() * 7000;
+          setTimeout(() => {
+            if (agent.state !== 'on_break') return;
+            this._walkTo(agent, agent.desk.tileX, agent.desk.tileY, () => {
+              this._sitDown(agent);
+            });
+          }, idleDur);
+        });
+        return;
+      }
+      // No colleague found — fall through to wander
+    }
+
+    if (activity === 'coffee') {
+      const room = this.tm.rooms.find(r => r.name === 'Küche');
+      if (room) {
+        const tx = room.centerX + Math.floor(Math.random() * 3) - 1;
+        const ty = room.centerY + Math.floor(Math.random() * 3) - 1;
+        this._walkTo(agent, tx, ty, () => {
+          agent.sprite.anims.play(`${agent.spriteName}_idle_down`, true);
+          this._showBubble(agent, 'Erstmal Kaffee...', 4000);
+          // Check for colleagues also in the kitchen and chat
+          const buddy = this._findAgentInRoom(agent, 'Küche');
+          if (buddy) {
+            setTimeout(() => {
+              this._showBubble(buddy, 'Auch Kaffee? ☕', 3000);
+            }, 1500);
+          }
+          const dur = 6000 + Math.random() * 4000;
+          setTimeout(() => {
+            if (agent.state !== 'on_break') return;
+            this._walkTo(agent, agent.desk.tileX, agent.desk.tileY, () => {
+              this._sitDown(agent);
+            });
+          }, dur);
+        });
+        return;
+      }
+    }
+
+    if (activity === 'whiteboard') {
+      const room = this.tm.rooms.find(r => r.name === 'Gemeinschaftsraum');
+      if (room) {
+        const tx = room.centerX + Math.floor(Math.random() * 3) - 1;
+        const ty = room.centerY + Math.floor(Math.random() * 3) - 1;
+        this._walkTo(agent, tx, ty, () => {
+          agent.sprite.anims.play(`${agent.spriteName}_idle_up`, true);
+          this._showBubble(agent, 'Hmm...', 3000);
+          const dur = 5000 + Math.random() * 3000;
+          setTimeout(() => {
+            if (agent.state !== 'on_break') return;
+            this._walkTo(agent, agent.desk.tileX, agent.desk.tileY, () => {
+              this._sitDown(agent);
+            });
+          }, dur);
+        });
+        return;
+      }
+    }
+
+    // 'wander' (and fallback for any failed activity above)
     const pauseRoom = PAUSE_ROOMS[Math.floor(Math.random() * PAUSE_ROOMS.length)];
     const room = this.tm.rooms.find(r => r.name === pauseRoom);
     if (!room) { this._sitDown(agent); return; }
 
-    // Pick a random tile near room center (not exact center, for variety)
     const targetX = room.centerX + Math.floor(Math.random() * 3) - 1;
     const targetY = room.centerY + Math.floor(Math.random() * 3) - 1;
 
@@ -311,6 +467,64 @@ export class AgentManager {
         });
       }, idleDuration);
     });
+  }
+
+  /* ── NPC Thought Bubbles ── */
+
+  _scheduleRandomThought(agent) {
+    if (!agent.isNPC) return;
+    if (agent.thoughtTimer) { clearTimeout(agent.thoughtTimer); agent.thoughtTimer = null; }
+    const delay = 30000 + Math.random() * 30000;
+    agent.thoughtTimer = setTimeout(() => {
+      if (agent.state !== 'working') return;
+      const thought = NPC_THOUGHTS[Math.floor(Math.random() * NPC_THOUGHTS.length)];
+      this._showBubble(agent, thought, 3000);
+      this._scheduleRandomThought(agent); // schedule next thought
+    }, delay);
+  }
+
+  _showBubble(agent, message, duration) {
+    if (!this.bubbleManager) return;
+    this.bubbleManager.showBubble(agent.id, message);
+    // Override the default 5s duration if shorter
+    if (duration && duration < 5000) {
+      const bubble = this.bubbleManager.bubbles.get(agent.id);
+      if (bubble && bubble.timer) {
+        bubble.timer.remove();
+        bubble.timer = this.scene.time.delayedCall(duration, () => {
+          this.bubbleManager.hideBubble(agent.id);
+        });
+      }
+    }
+  }
+
+  /* ── NPC Colleague Helpers ── */
+
+  _findNearbyColleague(agent) {
+    // Find another NPC that is currently working (seated at their desk)
+    for (const other of this.agents.values()) {
+      if (other === agent || !other.isNPC) continue;
+      if (other.state !== 'working') continue;
+      if (other.desk) return other;
+    }
+    return null;
+  }
+
+  _findAgentInRoom(agent, roomName) {
+    const room = this.tm.rooms.find(r => r.name === roomName);
+    if (!room) return null;
+    for (const other of this.agents.values()) {
+      if (other === agent) continue;
+      if (other.state !== 'on_break') continue;
+      // Check if other is inside the room bounds
+      if (
+        other.tileX >= room.x - 1 && other.tileX <= room.x + room.width + 1 &&
+        other.tileY >= room.y - 1 && other.tileY <= room.y + room.height + 1
+      ) {
+        return other;
+      }
+    }
+    return null;
   }
 
   /* ── Pathfinding & Walking ── */

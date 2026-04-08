@@ -162,6 +162,7 @@ export class OfficeScene extends Phaser.Scene {
     // Speech bubbles
     this.bubbleManager = new BubbleManager(this, this.agentManager);
     this.bubbleManager.create();
+    this.agentManager.setBubbleManager(this.bubbleManager);
 
     // Popup panels
     this.panelManager = new PanelManager();
