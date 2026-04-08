@@ -9,7 +9,7 @@ from typing import TextIO
 import anyio
 import anyio.lowlevel
 from anyio.streams.text import TextReceiveStream
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from mcp import types
 from mcp.client.stdio import StdioServerParameters
 
@@ -42,6 +42,8 @@ async def filtered_stdio_client(server: StdioServerParameters, errlog: TextIO = 
     write_stream, write_stream_reader = anyio.create_memory_object_stream[SessionMessage](0)
 
     env = {**_get_default_environment(), **server.env} if server.env is not None else _get_default_environment()
+    encoding = getattr(server, "encoding", "utf-8")
+    encoding_errors = getattr(server, "encoding_error_handler", "strict")
 
     try:
         process = await anyio.open_process(
@@ -64,9 +66,7 @@ async def filtered_stdio_client(server: StdioServerParameters, errlog: TextIO = 
             async with read_stream_writer:
                 buffer = ""
                 async for chunk in TextReceiveStream(
-                    process.stdout,
-                    encoding=server.encoding,
-                    errors=server.encoding_error_handler,
+                    process.stdout, encoding=encoding, errors=encoding_errors,
                 ):
                     lines = (buffer + chunk).split("\n")
                     buffer = lines.pop()
@@ -82,15 +82,17 @@ async def filtered_stdio_client(server: StdioServerParameters, errlog: TextIO = 
                             log.debug("MCP stdout (invalid JSON, dropped): %s", line[:120])
                             continue
                         await read_stream_writer.send(SessionMessage(message))
-                # Issue #4 fix: process remaining buffer at EOF
+                # Process remaining buffer at EOF
                 if buffer.strip() and buffer.strip().startswith("{"):
                     try:
                         message = types.JSONRPCMessage.model_validate_json(buffer.strip())
                         await read_stream_writer.send(SessionMessage(message))
                     except Exception:
                         log.debug("MCP stdout (invalid JSON at EOF, dropped): %s", buffer[:120])
-        except anyio.ClosedResourceError:
-            await anyio.lowlevel.checkpoint()
+        except (anyio.ClosedResourceError, anyio.EndOfStream):
+            pass
+        except Exception as e:
+            log.debug("MCP stdout_reader error: %s", e)
 
     async def stdin_writer():
         assert process.stdin
@@ -99,13 +101,12 @@ async def filtered_stdio_client(server: StdioServerParameters, errlog: TextIO = 
                 async for session_message in write_stream_reader:
                     json_str = session_message.message.model_dump_json(by_alias=True, exclude_none=True)
                     await process.stdin.send(
-                        (json_str + "\n").encode(
-                            encoding=server.encoding,
-                            errors=server.encoding_error_handler,
-                        )
+                        (json_str + "\n").encode(encoding=encoding, errors=encoding_errors)
                     )
-        except anyio.ClosedResourceError:
-            await anyio.lowlevel.checkpoint()
+        except (anyio.ClosedResourceError, anyio.EndOfStream):
+            pass
+        except Exception as e:
+            log.debug("MCP stdin_writer error: %s", e)
 
     async with anyio.create_task_group() as tg:
         tg.start_soon(stdout_reader)
@@ -113,6 +114,7 @@ async def filtered_stdio_client(server: StdioServerParameters, errlog: TextIO = 
         try:
             yield read_stream, write_stream
         finally:
+            tg.cancel_scope.cancel()
             try:
                 process.terminate()
             except ProcessLookupError:
@@ -139,4 +141,3 @@ async def filtered_stdio_client(server: StdioServerParameters, errlog: TextIO = 
             await write_stream.aclose()
             await read_stream_writer.aclose()
             await write_stream_reader.aclose()
-            tg.cancel_scope.cancel()
