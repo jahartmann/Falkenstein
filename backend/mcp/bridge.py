@@ -2,6 +2,7 @@
 from __future__ import annotations
 import asyncio
 import logging
+import shlex
 import time
 from dataclasses import dataclass
 from mcp import ClientSession, StdioServerParameters
@@ -60,7 +61,7 @@ class MCPBridge:
         # Wrap command in a shell filter that only passes JSON-RPC lines
         # (lines starting with '{') to stdout; everything else goes to stderr.
         # This prevents debug/init messages from corrupting the MCP protocol.
-        inner_cmd = " ".join([cfg.command] + cfg.args)
+        inner_cmd = " ".join(shlex.quote(a) for a in [cfg.command] + cfg.args)
         server_params = StdioServerParameters(
             command="sh",
             args=["-c", f'{inner_cmd} | while IFS= read -r line; do case "$line" in \\{{*) echo "$line" ;; *) echo "$line" >&2 ;; esac; done'],
