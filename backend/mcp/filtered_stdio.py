@@ -8,13 +8,22 @@ from typing import TextIO
 
 import anyio
 import anyio.lowlevel
-from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 from anyio.streams.text import TextReceiveStream
 from mcp import types
-from mcp.client.stdio import StdioServerParameters, get_default_environment, PROCESS_TERMINATION_TIMEOUT
+from mcp.client.stdio import StdioServerParameters
 from mcp.shared.message import SessionMessage
 
 log = logging.getLogger(__name__)
+
+# Timeout before force-killing the process
+PROCESS_TERMINATION_TIMEOUT = 2.0
+
+# Safe env vars to pass to subprocess (matches MCP SDK)
+_POSIX_ENV_VARS = ("HOME", "LOGNAME", "PATH", "SHELL", "TERM", "USER")
+
+
+def _get_default_environment() -> dict[str, str]:
+    return {k: os.environ[k] for k in _POSIX_ENV_VARS if k in os.environ}
 
 
 @asynccontextmanager
@@ -24,7 +33,7 @@ async def filtered_stdio_client(server: StdioServerParameters, errlog: TextIO = 
     read_stream_writer, read_stream = anyio.create_memory_object_stream[SessionMessage | Exception](0)
     write_stream, write_stream_reader = anyio.create_memory_object_stream[SessionMessage](0)
 
-    env = {**get_default_environment(), **server.env} if server.env is not None else get_default_environment()
+    env = {**_get_default_environment(), **server.env} if server.env is not None else _get_default_environment()
 
     try:
         process = await anyio.open_process(
@@ -89,7 +98,6 @@ async def filtered_stdio_client(server: StdioServerParameters, errlog: TextIO = 
         try:
             yield read_stream, write_stream
         finally:
-            # Terminate process before closing streams
             try:
                 process.terminate()
             except ProcessLookupError:
