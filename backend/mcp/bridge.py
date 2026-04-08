@@ -29,13 +29,16 @@ class MCPBridge:
     def servers(self) -> list[ServerStatus]:
         return self.registry.list_servers()
 
-    async def start(self) -> None:
+    async def start(self, timeout: float = 30.0) -> None:
         for s in self.registry.list_servers():
             if not s.config.enabled:
                 self.registry.update_status(s.config.id, status="disabled")
                 continue
             try:
-                await self._start_server(s.config.id)
+                await asyncio.wait_for(self._start_server(s.config.id), timeout=timeout)
+            except asyncio.TimeoutError:
+                log.error("MCP server %s timed out after %.0fs", s.config.id, timeout)
+                self.registry.update_status(s.config.id, status="error", last_error=f"Timeout after {timeout}s")
             except Exception as e:
                 log.error("Failed to start MCP server %s: %s", s.config.id, e)
                 self.registry.update_status(s.config.id, status="error", last_error=str(e))
@@ -54,7 +57,15 @@ class MCPBridge:
         if status is None:
             return
         cfg = status.config
-        server_params = StdioServerParameters(command=cfg.command, args=cfg.args, env=cfg.env if cfg.env else None)
+        # Wrap command in a shell filter that only passes JSON-RPC lines
+        # (lines starting with '{') to stdout; everything else goes to stderr.
+        # This prevents debug/init messages from corrupting the MCP protocol.
+        inner_cmd = " ".join([cfg.command] + cfg.args)
+        server_params = StdioServerParameters(
+            command="sh",
+            args=["-c", f'{inner_cmd} | while IFS= read -r line; do case "$line" in \\{{*) echo "$line" ;; *) echo "$line" >&2 ;; esac; done'],
+            env=cfg.env if cfg.env else None,
+        )
         ctx = stdio_client(server_params)
         streams = await ctx.__aenter__()
         self._contexts[server_id] = ctx
