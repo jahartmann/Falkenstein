@@ -90,14 +90,19 @@ class MCPBridge:
         log.info("MCP server %s started with %d tools", server_id, len(tool_schemas))
 
     async def _stop_server(self, server_id: str) -> None:
-        self._sessions.pop(server_id, None)
-        ctx = self._contexts.pop(server_id, None)
-        # Kill the subprocess directly instead of using __aexit__ (avoids cancel scope errors)
-        if ctx and hasattr(ctx, '_process'):
+        # Close session first, then the stdio context (reverse order of opening)
+        session = self._sessions.pop(server_id, None)
+        if session:
             try:
-                ctx._process.terminate()
-            except Exception:
-                pass
+                await session.__aexit__(None, None, None)
+            except Exception as e:
+                log.debug("Session close for %s: %s", server_id, e)
+        ctx = self._contexts.pop(server_id, None)
+        if ctx:
+            try:
+                await ctx.__aexit__(None, None, None)
+            except Exception as e:
+                log.debug("Context close for %s: %s", server_id, e)
         self._tool_cache.pop(server_id, None)
         self._start_times.pop(server_id, None)
         self.registry.update_status(server_id, status="stopped", pid=None, tools_count=0)
