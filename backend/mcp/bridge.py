@@ -2,11 +2,10 @@
 from __future__ import annotations
 import asyncio
 import logging
-import shlex
 import time
 from dataclasses import dataclass
 from mcp import ClientSession, StdioServerParameters
-from mcp.client.stdio import stdio_client
+from backend.mcp.filtered_stdio import filtered_stdio_client
 from backend.mcp.config import MCPServerConfig, ServerStatus, ToolSchema
 from backend.mcp.registry import MCPRegistry
 
@@ -58,16 +57,11 @@ class MCPBridge:
         if status is None:
             return
         cfg = status.config
-        # Wrap command in a shell filter that only passes JSON-RPC lines
-        # (lines starting with '{') to stdout; everything else goes to stderr.
-        # This prevents debug/init messages from corrupting the MCP protocol.
-        inner_cmd = " ".join(shlex.quote(a) for a in [cfg.command] + cfg.args)
         server_params = StdioServerParameters(
-            command="sh",
-            args=["-c", f'{inner_cmd} | while IFS= read -r line; do case "$line" in \\{{*) echo "$line" ;; *) echo "$line" >&2 ;; esac; done'],
+            command=cfg.command, args=cfg.args,
             env=cfg.env if cfg.env else None,
         )
-        ctx = stdio_client(server_params)
+        ctx = filtered_stdio_client(server_params)
         streams = await ctx.__aenter__()
         self._contexts[server_id] = ctx
         session = ClientSession(*streams)
