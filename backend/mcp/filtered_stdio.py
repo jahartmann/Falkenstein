@@ -78,8 +78,13 @@ async def filtered_stdio_client(server: StdioServerParameters, errlog: TextIO = 
                             continue
                         try:
                             message = types.JSONRPCMessage.model_validate_json(line)
-                        except Exception:
-                            log.debug("MCP stdout (invalid JSON, dropped): %s", line[:120])
+                        except Exception as exc:
+                            # Forward parse error so callers unblock with an error
+                            # instead of hanging forever on a missing response
+                            log.warning("MCP stdout (invalid JSON-RPC): %s", line[:120])
+                            await read_stream_writer.send(
+                                Exception(f"Invalid JSON-RPC from server: {line[:200]}")
+                            )
                             continue
                         await read_stream_writer.send(SessionMessage(message))
                 # Process remaining buffer at EOF

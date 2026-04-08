@@ -17,11 +17,14 @@ class ToolResult:
     success: bool
     output: str
 
+TOOL_CALL_TIMEOUT = 60.0  # seconds before a tool call is considered hung
+
 class MCPBridge:
     def __init__(self, registry: MCPRegistry) -> None:
         self.registry = registry
         self._sessions: dict[str, ClientSession] = {}
         self._contexts: dict[str, object] = {}
+        self._processes: dict[str, object] = {}  # track subprocess for PID verification
         self._tool_cache: dict[str, list[ToolSchema]] = {}
         self._start_times: dict[str, float] = {}
         self._health_task: asyncio.Task | None = None
@@ -94,7 +97,6 @@ class MCPBridge:
         log.info("MCP server %s started with %d tools", server_id, len(tool_schemas))
 
     async def _stop_server(self, server_id: str) -> None:
-        # Issue #3 fix: pass exc_info for proper context manager cleanup
         session = self._sessions.pop(server_id, None)
         if session:
             try:
@@ -102,15 +104,23 @@ class MCPBridge:
             except Exception as e:
                 log.debug("Session close for %s: %s", server_id, e)
         ctx = self._contexts.pop(server_id, None)
+        teardown_ok = True
         if ctx:
             try:
                 await ctx.__aexit__(None, None, None)
             except Exception as e:
-                log.debug("Context close for %s: %s", server_id, e)
+                teardown_ok = False
+                log.warning("Context close failed for %s: %s", server_id, e)
+                self.registry.update_status(
+                    server_id, status="error",
+                    last_error=f"Shutdown failed: {e}",
+                )
         self._tool_cache.pop(server_id, None)
         self._start_times.pop(server_id, None)
-        self.registry.update_status(server_id, status="stopped", pid=None, tools_count=0)
-        log.info("MCP server %s stopped", server_id)
+        self._processes.pop(server_id, None)
+        if teardown_ok:
+            self.registry.update_status(server_id, status="stopped", pid=None, tools_count=0)
+            log.info("MCP server %s stopped", server_id)
 
     async def restart_server(self, server_id: str) -> None:
         await self._stop_server(server_id)
@@ -152,12 +162,15 @@ class MCPBridge:
                         log.warning("Failed to list tools for %s: %s", sid, e)
         return all_tools
 
-    async def call_tool(self, server_id: str, tool_name: str, args: dict) -> ToolResult:
+    async def call_tool(self, server_id: str, tool_name: str, args: dict,
+                        timeout: float = TOOL_CALL_TIMEOUT) -> ToolResult:
         session = self._sessions.get(server_id)
         if session is None:
             return ToolResult(success=False, output=f"Server '{server_id}' not connected")
         try:
-            result = await session.call_tool(tool_name, arguments=args)
+            result = await asyncio.wait_for(
+                session.call_tool(tool_name, arguments=args), timeout=timeout,
+            )
             output_parts = []
             for block in result.content:
                 if hasattr(block, "text"):
@@ -166,6 +179,9 @@ class MCPBridge:
                     output_parts.append(str(block))
             output = "\n".join(output_parts)
             return ToolResult(success=not result.isError, output=output)
+        except asyncio.TimeoutError:
+            log.error("MCP tool call timed out after %.0fs: %s/%s", timeout, server_id, tool_name)
+            return ToolResult(success=False, output=f"Timeout after {timeout}s")
         except Exception as e:
             log.error("MCP tool call failed: %s/%s: %s", server_id, tool_name, e)
             return ToolResult(success=False, output=f"Error: {e}")
