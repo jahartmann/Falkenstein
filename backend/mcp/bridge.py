@@ -2,6 +2,7 @@
 from __future__ import annotations
 import asyncio
 import logging
+import sys
 import time
 from dataclasses import dataclass
 from mcp import ClientSession, StdioServerParameters
@@ -53,6 +54,7 @@ class MCPBridge:
                 log.warning("Error stopping %s: %s", sid, e)
 
     async def _start_server(self, server_id: str) -> None:
+        # Issue #2 fix: proper cleanup on partial failure
         status = self.registry.get(server_id)
         if status is None:
             return
@@ -63,28 +65,36 @@ class MCPBridge:
         )
         ctx = filtered_stdio_client(server_params)
         streams = await ctx.__aenter__()
+        try:
+            session = ClientSession(*streams)
+            await session.__aenter__()
+            try:
+                await session.initialize()
+                tools_result = await session.list_tools()
+                tool_schemas = [
+                    ToolSchema(
+                        name=t.name,
+                        description=t.description or "",
+                        server_id=server_id,
+                        input_schema=t.inputSchema if hasattr(t, "inputSchema") else {},
+                    )
+                    for t in tools_result.tools
+                ]
+            except BaseException:
+                await session.__aexit__(*sys.exc_info())
+                raise
+        except BaseException:
+            await ctx.__aexit__(*sys.exc_info())
+            raise
         self._contexts[server_id] = ctx
-        session = ClientSession(*streams)
-        await session.__aenter__()
-        await session.initialize()
         self._sessions[server_id] = session
-        self._start_times[server_id] = time.time()
-        tools_result = await session.list_tools()
-        tool_schemas = [
-            ToolSchema(
-                name=t.name,
-                description=t.description or "",
-                server_id=server_id,
-                input_schema=t.inputSchema if hasattr(t, "inputSchema") else {},
-            )
-            for t in tools_result.tools
-        ]
         self._tool_cache[server_id] = tool_schemas
+        self._start_times[server_id] = time.time()
         self.registry.update_status(server_id, status="running", pid=None, tools_count=len(tool_schemas))
         log.info("MCP server %s started with %d tools", server_id, len(tool_schemas))
 
     async def _stop_server(self, server_id: str) -> None:
-        # Close session first, then the stdio context (reverse order of opening)
+        # Issue #3 fix: pass exc_info for proper context manager cleanup
         session = self._sessions.pop(server_id, None)
         if session:
             try:
@@ -117,8 +127,9 @@ class MCPBridge:
         return self._tool_cache.get(server_id, [])
 
     async def discover_tools(self) -> list[ToolSchema]:
+        # Issue #5 fix: snapshot dict to avoid mutation during iteration
         all_tools: list[ToolSchema] = []
-        for sid, session in self._sessions.items():
+        for sid, session in list(self._sessions.items()):
             status = self.registry.get(sid)
             if status and status.status == "running":
                 if sid in self._tool_cache:

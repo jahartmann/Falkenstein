@@ -82,6 +82,13 @@ async def filtered_stdio_client(server: StdioServerParameters, errlog: TextIO = 
                             log.debug("MCP stdout (invalid JSON, dropped): %s", line[:120])
                             continue
                         await read_stream_writer.send(SessionMessage(message))
+                # Issue #4 fix: process remaining buffer at EOF
+                if buffer.strip() and buffer.strip().startswith("{"):
+                    try:
+                        message = types.JSONRPCMessage.model_validate_json(buffer.strip())
+                        await read_stream_writer.send(SessionMessage(message))
+                    except Exception:
+                        log.debug("MCP stdout (invalid JSON at EOF, dropped): %s", buffer[:120])
         except anyio.ClosedResourceError:
             await anyio.lowlevel.checkpoint()
 
