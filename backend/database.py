@@ -202,6 +202,18 @@ class Database:
                 topic          TEXT,
                 created_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
+
+            CREATE TABLE IF NOT EXISTS mcp_calls (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                server_id    TEXT NOT NULL,
+                tool_name    TEXT NOT NULL,
+                args         TEXT,
+                result       TEXT,
+                success      BOOLEAN,
+                duration_ms  INTEGER,
+                triggered_by TEXT,
+                created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
         """)
         await self._conn.commit()
 
@@ -870,5 +882,42 @@ class Database:
         cursor = await self._conn.execute(
             "SELECT * FROM crews WHERE status = 'active' ORDER BY started_at DESC"
         )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+    # ------------------------------------------------------------------
+    # MCP calls
+    # ------------------------------------------------------------------
+
+    async def log_mcp_call(
+        self,
+        server_id: str,
+        tool_name: str,
+        args: str,
+        result: str,
+        success: bool,
+        duration_ms: int,
+        triggered_by: str,
+    ) -> None:
+        await self._conn.execute(
+            """INSERT INTO mcp_calls (server_id, tool_name, args, result, success, duration_ms, triggered_by)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (server_id, tool_name, args, result, success, duration_ms, triggered_by),
+        )
+        await self._conn.commit()
+
+    async def get_mcp_calls(
+        self, limit: int = 50, server_id: str | None = None
+    ) -> list[dict]:
+        self._conn.row_factory = aiosqlite.Row
+        if server_id:
+            cursor = await self._conn.execute(
+                "SELECT * FROM mcp_calls WHERE server_id = ? ORDER BY created_at DESC, id DESC LIMIT ?",
+                (server_id, limit),
+            )
+        else:
+            cursor = await self._conn.execute(
+                "SELECT * FROM mcp_calls ORDER BY created_at DESC, id DESC LIMIT ?", (limit,),
+            )
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
