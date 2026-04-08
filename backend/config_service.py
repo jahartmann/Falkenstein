@@ -33,6 +33,13 @@ _ENV_KEY_MAP = {
     "brave_api_key": "BRAVE_API_KEY",
     "serper_api_key": "SERPER_API_KEY",
     "ollama_keep_alive": "OLLAMA_KEEP_ALIVE",
+    "mcp_servers": "MCP_SERVERS",
+    "mcp_apple_enabled": "MCP_APPLE_ENABLED",
+    "mcp_desktop_commander_enabled": "MCP_DESKTOP_COMMANDER_ENABLED",
+    "mcp_obsidian_enabled": "MCP_OBSIDIAN_ENABLED",
+    "mcp_node_path": "MCP_NODE_PATH",
+    "mcp_auto_restart": "MCP_AUTO_RESTART",
+    "mcp_health_interval": "MCP_HEALTH_INTERVAL",
 }
 
 

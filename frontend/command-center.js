@@ -674,10 +674,23 @@ async function loadMCP() {
       return;
     }
     if (!Array.isArray(servers) || servers.length === 0) {
-      const msg = !bridgeInitialized
-        ? 'MCP Bridge nicht initialisiert (MCP_SERVERS in .env leer?)'
-        : 'Keine MCP Server konfiguriert';
-      grid.innerHTML = `<div class="card" style="grid-column:1/-1"><span class="text-muted">${msg}</span></div>`;
+      grid.innerHTML = `<div class="card" style="grid-column:1/-1">
+        <div class="card-header">MCP Server einrichten</div>
+        <p style="color:var(--text-secondary);font-size:14px;margin-bottom:12px">
+          Noch keine MCP Server konfiguriert. MCP Server verbinden Falkenstein mit deinen Geräten und Diensten.
+        </p>
+        <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px">
+          <strong>Voraussetzung:</strong> Node.js muss installiert sein (<code>brew install node</code>)
+        </p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-primary" onclick="setupMCP()">MCP Server aktivieren</button>
+        </div>
+        <div style="margin-top:16px;font-size:12px;color:var(--text-muted)">
+          Verfügbare Server: <strong>apple-mcp</strong> (Reminders, Calendar, Notes, Music, HomeKit),
+          <strong>desktop-commander</strong> (Shell, Apps, Dateien),
+          <strong>mcp-obsidian</strong> (Vault lesen/schreiben)
+        </div>
+      </div>`;
       return;
     }
     grid.innerHTML = servers.map(s => {
@@ -746,6 +759,26 @@ async function toggleMCPServer(serverId, enabled) {
     });
     showToast(enabled ? 'Server aktiviert' : 'Server deaktiviert');
     loadMCP();
+  } catch (e) { showToast('Fehler: ' + e.message); }
+}
+
+async function setupMCP() {
+  showToast('MCP Server werden konfiguriert...');
+  try {
+    await api('/config', {
+      method: 'PUT',
+      body: JSON.stringify({ updates: {
+        mcp_servers: 'apple-mcp,desktop-commander,mcp-obsidian',
+        mcp_apple_enabled: 'true',
+        mcp_desktop_commander_enabled: 'true',
+        mcp_obsidian_enabled: 'true',
+        mcp_node_path: 'npx',
+        mcp_auto_restart: 'true',
+      }}),
+    });
+    showToast('MCP konfiguriert! Server neustarten um zu aktivieren.');
+    loadMCP();
+    loadConfig();
   } catch (e) { showToast('Fehler: ' + e.message); }
 }
 
