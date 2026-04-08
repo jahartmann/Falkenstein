@@ -1,23 +1,30 @@
 /**
- * MusicPlayer — HTML5 Audio + Web Audio API fallback
- * Genres: lofi, jazz, ambient, classical
+ * MusicPlayer — HTML5 Audio + Web Audio API fallback + Apple Music via MCP
+ * Genres: lofi, jazz, ambient, classical + apple_* variants
  * Falls back to procedurally generated ambient pad when no .mp3 files are present
  */
 class MusicPlayer {
   constructor() {
-    this.volume = 0.3;
-    this.genre = 'lofi';
+    this.volume = parseFloat(localStorage.getItem('music_volume') ?? '0.3');
+    this.genre = localStorage.getItem('music_genre') || 'lofi';
     this.isPlaying = false;
     this.currentIndex = 0;
     this.audio = null;
     this.audioCtx = null;
     this.generatorNodes = [];
+    this._pulseInterval = null;
+    this._jazzPitchTimer = null;
+    this._classicalSwellTimer = null;
 
     this.genres = {
       lofi:      { label: 'Lofi Beats',      tracks: ['/static/music/lofi_1.mp3', '/static/music/lofi_2.mp3'] },
       jazz:      { label: 'Jazz Vibes',       tracks: ['/static/music/jazz_1.mp3', '/static/music/jazz_2.mp3'] },
       ambient:   { label: 'Ambient Waves',    tracks: ['/static/music/ambient_1.mp3', '/static/music/ambient_2.mp3'] },
       classical: { label: 'Classical Piano',  tracks: ['/static/music/classical_1.mp3', '/static/music/classical_2.mp3'] },
+      apple_lofi:      { label: 'Apple Lofi',      tracks: [] },
+      apple_jazz:      { label: 'Apple Jazz',       tracks: [] },
+      apple_ambient:   { label: 'Apple Ambient',    tracks: [] },
+      apple_classical: { label: 'Apple Classical',  tracks: [] },
     };
 
     // Ambient pad config per genre (used when mp3 not found)
@@ -28,6 +35,18 @@ class MusicPlayer {
       ambient:   { freqs: [65.41, 98, 130.81],           detune: 20, gain: 0.06, lfoRate: 0.02 },
       classical: { freqs: [261.63, 329.63, 392, 523.25], detune: 2,  gain: 0.07, lfoRate: 0 },
     };
+
+    // Apple Music search terms per genre
+    this._appleMusicTerms = {
+      apple_lofi:      'lofi beats chill',
+      apple_jazz:      'jazz cafe smooth',
+      apple_ambient:   'ambient relaxation',
+      apple_classical: 'classical piano peaceful',
+    };
+  }
+
+  _isAppleGenre(g) {
+    return (g || this.genre).startsWith('apple_');
   }
 
   _currentTracks() {
@@ -37,7 +56,8 @@ class MusicPlayer {
   _updateTitle() {
     const genreLabel = this.genres[this.genre]?.label || this.genre;
     const tracks = this._currentTracks();
-    const trackNum = tracks.length > 0 ? ` ${this.currentIndex + 1}/${tracks.length}` : '';
+    const trackNum = (!this._isAppleGenre() && tracks.length > 0)
+      ? ` ${this.currentIndex + 1}/${tracks.length}` : '';
     const el = document.getElementById('music-title');
     if (el) el.textContent = genreLabel + trackNum;
   }
@@ -45,6 +65,22 @@ class MusicPlayer {
   _updateToggleBtn(playing) {
     const btn = document.getElementById('music-toggle');
     if (btn) btn.textContent = playing ? '⏸' : '▶';
+  }
+
+  _setPulse(active) {
+    clearInterval(this._pulseInterval);
+    const icon = document.querySelector('#music-player .music-icon');
+    if (!icon) return;
+    if (active) {
+      icon.style.transition = 'opacity 0.6s ease-in-out';
+      let visible = true;
+      this._pulseInterval = setInterval(() => {
+        visible = !visible;
+        icon.style.opacity = visible ? '1' : '0.3';
+      }, 600);
+    } else {
+      icon.style.opacity = '1';
+    }
   }
 
   /* ── HTML5 Audio playback ── */
@@ -75,6 +111,40 @@ class MusicPlayer {
     }
   }
 
+  /* ── Apple Music via Falkenstein API ── */
+
+  async _playAppleMusic(genre) {
+    const term = this._appleMusicTerms[genre] || 'lofi beats';
+    try {
+      const token = localStorage.getItem('falkenstein_token');
+      const resp = await fetch('/api/admin/tasks/submit', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': 'Bearer ' + token } : {}),
+        },
+        body: JSON.stringify({ text: `Spiel "${term}" auf Apple Music` }),
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const el = document.getElementById('music-title');
+      if (el) el.textContent = `Apple Music: ${genre.replace('apple_', '')}`;
+      this.isPlaying = true;
+      this._updateToggleBtn(true);
+      this._setPulse(true);
+      console.info(`MusicPlayer: Apple Music gestartet — "${term}"`);
+    } catch (e) {
+      console.warn('MusicPlayer: Apple Music nicht verfügbar, nutze generierten Pad', e);
+      // map apple genre to local fallback
+      const fallback = genre.replace('apple_', '');
+      const savedGenre = this.genre;
+      this.genre = fallback in this.padConfig ? fallback : 'ambient';
+      this._startGeneratedPad();
+      this.genre = savedGenre;
+      const el = document.getElementById('music-title');
+      if (el) el.textContent = `Fallback: ${fallback}`;
+    }
+  }
+
   /* ── Web Audio fallback: layered detuned sine oscillators ── */
 
   _ensureAudioCtx() {
@@ -87,11 +157,65 @@ class MusicPlayer {
     return this.audioCtx;
   }
 
+  // Brownian/pink noise buffer for lofi texture
+  _createNoiseBuffer(ctx, seconds = 3) {
+    const bufSize = ctx.sampleRate * seconds;
+    const buf = ctx.createBuffer(1, bufSize, ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    let lastOut = 0;
+    for (let i = 0; i < bufSize; i++) {
+      const white = Math.random() * 2 - 1;
+      // Simple brownian noise: integrate white noise with leak
+      lastOut = (lastOut + 0.02 * white) / 1.02;
+      data[i] = lastOut * 3.5;
+    }
+    return buf;
+  }
+
   _startGeneratedPad() {
     const ctx = this._ensureAudioCtx();
-    const cfg = this.padConfig[this.genre] || this.padConfig.ambient;
+    const genre = this._isAppleGenre() ? this.genre.replace('apple_', '') : this.genre;
+    const cfg = this.padConfig[genre] || this.padConfig.ambient;
     this._stopGeneratedPad();
 
+    // Master output gain
+    const masterGain = ctx.createGain();
+    masterGain.gain.value = this.volume;
+    masterGain.connect(ctx.destination);
+    this.generatorNodes.push(masterGain);
+
+    // ── Genre-specific effects ──
+
+    // AMBIENT: feedback delay (simple reverb-like effect)
+    let ambientDelay = null;
+    let ambientFeedback = null;
+    if (genre === 'ambient') {
+      ambientDelay = ctx.createDelay(2.0);
+      ambientDelay.delayTime.value = 0.45;
+      ambientFeedback = ctx.createGain();
+      ambientFeedback.gain.value = 0.55;
+      ambientDelay.connect(ambientFeedback);
+      ambientFeedback.connect(ambientDelay);
+      ambientDelay.connect(masterGain);
+      this.generatorNodes.push(ambientDelay, ambientFeedback);
+    }
+
+    // LOFI: subtle brownian noise layer
+    if (genre === 'lofi') {
+      const noiseBuf = this._createNoiseBuffer(ctx);
+      const noiseSource = ctx.createBufferSource();
+      noiseSource.buffer = noiseBuf;
+      noiseSource.loop = true;
+      const noiseGain = ctx.createGain();
+      noiseGain.gain.value = 0.012 * this.volume; // very quiet
+      noiseSource.connect(noiseGain);
+      noiseGain.connect(masterGain);
+      noiseSource.start();
+      this.generatorNodes.push(noiseSource, noiseGain);
+    }
+
+    // Build oscillators
+    const oscNodes = [];
     cfg.freqs.forEach((freq, i) => {
       const osc = ctx.createOscillator();
       const gainNode = ctx.createGain();
@@ -101,12 +225,17 @@ class MusicPlayer {
       osc.frequency.value = freq;
       osc.detune.value = detune;
 
-      gainNode.gain.value = cfg.gain * this.volume;
+      gainNode.gain.value = cfg.gain;
       osc.connect(gainNode);
-      gainNode.connect(ctx.destination);
+
+      if (genre === 'ambient' && ambientDelay) {
+        gainNode.connect(ambientDelay);
+      }
+      gainNode.connect(masterGain);
 
       osc.start();
       this.generatorNodes.push(osc, gainNode);
+      oscNodes.push({ osc, gainNode });
 
       // Slow LFO tremolo — skip for genres with lfoRate === 0 (e.g. classical)
       if (cfg.lfoRate > 0) {
@@ -122,12 +251,48 @@ class MusicPlayer {
       }
     });
 
+    // JAZZ: random pitch variations every few seconds (simulated improvisation)
+    if (genre === 'jazz') {
+      clearTimeout(this._jazzPitchTimer);
+      const jazzVariation = () => {
+        if (!this.isPlaying) return;
+        oscNodes.forEach(({ osc }) => {
+          const shift = (Math.random() - 0.5) * 30; // ±15 cents
+          osc.detune.setTargetAtTime(osc.detune.value + shift, ctx.currentTime, 0.3);
+        });
+        const delay = 2000 + Math.random() * 3000; // 2–5 s
+        this._jazzPitchTimer = setTimeout(jazzVariation, delay);
+      };
+      this._jazzPitchTimer = setTimeout(jazzVariation, 2000);
+    }
+
+    // CLASSICAL: volume swells (crescendo/decrescendo)
+    if (genre === 'classical') {
+      clearTimeout(this._classicalSwellTimer);
+      const swellCycle = () => {
+        if (!this.isPlaying) return;
+        const now = ctx.currentTime;
+        const swellDuration = 4 + Math.random() * 3; // 4–7 s per phase
+        // Crescendo
+        masterGain.gain.setTargetAtTime(this.volume * 1.4, now, swellDuration * 0.4);
+        // Decrescendo back
+        masterGain.gain.setTargetAtTime(this.volume * 0.6, now + swellDuration * 0.5, swellDuration * 0.4);
+        // Restore base
+        masterGain.gain.setTargetAtTime(this.volume, now + swellDuration, 0.8);
+        this._classicalSwellTimer = setTimeout(swellCycle, (swellDuration + 2) * 1000);
+      };
+      this._classicalSwellTimer = setTimeout(swellCycle, 3000);
+    }
+
     this.isPlaying = true;
     this._updateToggleBtn(true);
     this._updateTitle();
+    this._setPulse(true);
   }
 
   _stopGeneratedPad() {
+    clearTimeout(this._jazzPitchTimer);
+    clearTimeout(this._classicalSwellTimer);
     this.generatorNodes.forEach(node => {
       try { node.disconnect(); } catch (_) {}
       if (node.stop) { try { node.stop(); } catch (_) {} }
@@ -138,14 +303,11 @@ class MusicPlayer {
   _updateGeneratedPadVolume() {
     const ctx = this.audioCtx;
     if (!ctx) return;
-    this.generatorNodes.forEach(node => {
-      if (node instanceof GainNode) {
-        // Only update main gain nodes (not LFO gains)
-        if (node.gain.value > 0.001) {
-          node.gain.setTargetAtTime(this.volume * 0.08, ctx.currentTime, 0.1);
-        }
-      }
-    });
+    // Update master gain (first GainNode pushed is the masterGain)
+    const master = this.generatorNodes.find(n => n instanceof GainNode);
+    if (master) {
+      master.gain.setTargetAtTime(this.volume, ctx.currentTime, 0.1);
+    }
   }
 
   /* ── Track navigation ── */
@@ -167,6 +329,10 @@ class MusicPlayer {
   }
 
   _startPlayback() {
+    if (this._isAppleGenre()) {
+      this._playAppleMusic(this.genre);
+      return;
+    }
     const tracks = this._currentTracks();
     if (tracks.length > 0) {
       this._playTrack(tracks[this.currentIndex]);
@@ -176,6 +342,7 @@ class MusicPlayer {
     this.isPlaying = true;
     this._updateToggleBtn(true);
     this._updateTitle();
+    this._setPulse(true);
   }
 
   _stopPlayback() {
@@ -183,6 +350,7 @@ class MusicPlayer {
     this._stopGeneratedPad();
     this.isPlaying = false;
     this._updateToggleBtn(false);
+    this._setPulse(false);
   }
 
   /* ── Public API ── */
@@ -198,11 +366,11 @@ class MusicPlayer {
   }
 
   next() {
-    this._nextTrack();
+    if (!this._isAppleGenre()) this._nextTrack();
   }
 
   prev() {
-    this._prevTrack();
+    if (!this._isAppleGenre()) this._prevTrack();
   }
 
   setVolume(v) {
@@ -211,6 +379,7 @@ class MusicPlayer {
     this._updateGeneratedPadVolume();
     const slider = document.getElementById('music-volume');
     if (slider) slider.value = Math.round(this.volume * 100);
+    localStorage.setItem('music_volume', String(this.volume));
   }
 
   setGenre(g) {
@@ -219,9 +388,28 @@ class MusicPlayer {
     this._stopPlayback();
     this.genre = g;
     this.currentIndex = 0;
+    localStorage.setItem('music_genre', g);
     if (wasPlaying) this._startPlayback();
     else this._updateTitle();
   }
+
+  /* ── Init: restore persisted state and sync UI ── */
+  init() {
+    const volumeSlider = document.getElementById('music-volume');
+    if (volumeSlider) volumeSlider.value = Math.round(this.volume * 100);
+
+    const genreSelect = document.getElementById('music-genre');
+    if (genreSelect && this.genres[this.genre]) genreSelect.value = this.genre;
+
+    this._updateTitle();
+  }
 }
 
-window.musicPlayer = new MusicPlayer();
+const musicPlayer = new MusicPlayer();
+window.musicPlayer = musicPlayer;
+// Run init after DOM is ready
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', () => musicPlayer.init());
+} else {
+  musicPlayer.init();
+}
