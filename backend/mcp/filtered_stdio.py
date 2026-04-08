@@ -1,22 +1,17 @@
 """Filtered stdio_client that silently drops non-JSON-RPC lines from stdout."""
 from __future__ import annotations
 import logging
+import os
 import sys
 from contextlib import asynccontextmanager
 from typing import TextIO
 
 import anyio
 import anyio.lowlevel
+from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 from anyio.streams.text import TextReceiveStream
 from mcp import types
-from mcp.client.stdio import (
-    StdioServerParameters,
-    _create_platform_compatible_process,
-    _get_executable_command,
-    _terminate_process_tree,
-    PROCESS_TERMINATION_TIMEOUT,
-    get_default_environment,
-)
+from mcp.client.stdio import StdioServerParameters, get_default_environment, PROCESS_TERMINATION_TIMEOUT
 from mcp.shared.message import SessionMessage
 
 log = logging.getLogger(__name__)
@@ -29,14 +24,15 @@ async def filtered_stdio_client(server: StdioServerParameters, errlog: TextIO = 
     read_stream_writer, read_stream = anyio.create_memory_object_stream[SessionMessage | Exception](0)
     write_stream, write_stream_reader = anyio.create_memory_object_stream[SessionMessage](0)
 
+    env = {**get_default_environment(), **server.env} if server.env is not None else get_default_environment()
+
     try:
-        command = _get_executable_command(server.command)
-        process = await _create_platform_compatible_process(
-            command=command,
-            args=server.args,
-            env=({**get_default_environment(), **server.env} if server.env is not None else get_default_environment()),
-            errlog=errlog,
+        process = await anyio.open_process(
+            [server.command, *server.args],
+            env=env,
+            stderr=errlog,
             cwd=server.cwd,
+            start_new_session=True,
         )
     except OSError:
         await read_stream.aclose()
@@ -60,7 +56,6 @@ async def filtered_stdio_client(server: StdioServerParameters, errlog: TextIO = 
                     for line in lines:
                         line = line.strip()
                         if not line or not line.startswith("{"):
-                            # Non-JSON line — log and skip instead of sending exception
                             if line:
                                 log.debug("MCP stdout (non-JSON, dropped): %s", line[:120])
                             continue
@@ -88,25 +83,37 @@ async def filtered_stdio_client(server: StdioServerParameters, errlog: TextIO = 
         except anyio.ClosedResourceError:
             await anyio.lowlevel.checkpoint()
 
-    async with anyio.create_task_group() as tg, process:
+    async with anyio.create_task_group() as tg:
         tg.start_soon(stdout_reader)
         tg.start_soon(stdin_writer)
         try:
             yield read_stream, write_stream
         finally:
+            # Terminate process before closing streams
+            try:
+                process.terminate()
+            except ProcessLookupError:
+                pass
+            try:
+                with anyio.fail_after(PROCESS_TERMINATION_TIMEOUT):
+                    await process.wait()
+            except (TimeoutError, ProcessLookupError):
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
             if process.stdin:
                 try:
                     await process.stdin.aclose()
                 except Exception:
                     pass
-            try:
-                with anyio.fail_after(PROCESS_TERMINATION_TIMEOUT):
-                    await process.wait()
-            except TimeoutError:
-                await _terminate_process_tree(process)
-            except ProcessLookupError:
-                pass
+            if process.stdout:
+                try:
+                    await process.stdout.aclose()
+                except Exception:
+                    pass
             await read_stream.aclose()
             await write_stream.aclose()
             await read_stream_writer.aclose()
             await write_stream_reader.aclose()
+            tg.cancel_scope.cancel()
