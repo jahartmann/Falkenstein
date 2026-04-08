@@ -11,9 +11,9 @@ let tasksOffset = 0;
 const TASKS_LIMIT = 50;
 const activityLog = [];
 let _searchTimer = null;
-let currentMemTab = 'all';
+let currentMemTab = 'user';
 let _allMemories = [];
-let taskViewMode = 'table';
+let taskViewMode = 'cards';
 
 // ============================================
 // Utilities
@@ -353,9 +353,9 @@ async function loadDashboardMCP() {
     if (Array.isArray(servers) && servers.length > 0) {
       el.innerHTML = servers.map(s =>
         `<div class="activity-item">
-          <div class="status-dot ${s.status === 'connected' || s.enabled ? 'online' : ''}"></div>
+          <div class="status-dot ${s.status === 'running' ? 'online' : ''}"></div>
           <span>${esc(s.name || s.id)}</span>
-          <span class="activity-time">${s.tools_count || 0} Tools</span>
+          <span class="activity-time">${s.status === 'error' ? 'Fehler' : (s.tools_count || 0) + ' Tools'}</span>
         </div>`
       ).join('');
     } else {
@@ -522,23 +522,34 @@ async function loadTasks() {
     const data = await api(url);
     const tasks = data.tasks || [];
 
-    const tbody = document.getElementById('tasks-tbody');
+    const grid = document.getElementById('tasks-card-grid');
     if (tasks.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="5" class="text-muted">Keine Tasks gefunden</td></tr>';
+      grid.innerHTML = '<div class="card" style="grid-column:1/-1"><span class="text-muted">Keine Tasks gefunden</span></div>';
     } else {
-      tbody.innerHTML = tasks.map(t => `
-        <tr>
-          <td>${esc(t.description || t.task || '')}</td>
-          <td>${badge(t.status || 'open')}</td>
-          <td>${agentBadge(t.agent_type)} ${esc(t.agent_id ? t.agent_id.slice(-8) : '')}</td>
-          <td>${relTime(t.created_at)}</td>
-          <td>
-            ${t.status === 'open' ? `<button class="btn btn-sm" onclick="patchTaskStatus('${esc(t.id)}','in_progress')">Starten</button>` : ''}
-            ${t.status === 'in_progress' ? `<button class="btn btn-sm" onclick="patchTaskStatus('${esc(t.id)}','done')">Fertig</button>` : ''}
-            <button class="btn btn-sm btn-danger" onclick="deleteTask('${esc(t.id)}')">X</button>
-          </td>
-        </tr>
-      `).join('');
+      const statusColors = { open: 'var(--amber)', in_progress: 'var(--accent)', done: 'var(--green)', failed: 'var(--red)' };
+      const statusLabels = { open: 'Offen', in_progress: 'In Arbeit', done: 'Erledigt', failed: 'Fehlgeschlagen' };
+      grid.innerHTML = tasks.map(t => {
+        const s = t.status || 'open';
+        const borderColor = statusColors[s] || 'var(--border)';
+        return `
+        <div class="task-card" style="border-left:3px solid ${borderColor}">
+          <div class="task-card-top">
+            ${badge(s)}
+            <span class="task-card-time">${relTime(t.created_at)}</span>
+          </div>
+          <div class="task-card-title">${esc(t.description || t.task || '')}</div>
+          <div class="task-card-meta">
+            ${t.agent_type ? `Agent: ${agentBadge(t.agent_type)}` : ''}
+            ${t.priority && t.priority !== 'normal' ? `<span class="badge badge-accent">${esc(t.priority)}</span>` : ''}
+          </div>
+          <div class="task-card-actions">
+            <select class="task-status-select" onchange="patchTaskStatus('${esc(t.id)}', this.value)">
+              ${Object.entries(statusLabels).map(([k, v]) => `<option value="${k}" ${k === s ? 'selected' : ''}>${v}</option>`).join('')}
+            </select>
+            <button class="btn btn-sm btn-danger" onclick="deleteTask('${esc(t.id)}')">Loeschen</button>
+          </div>
+        </div>`;
+      }).join('');
     }
 
     // Pagination
@@ -557,15 +568,16 @@ async function loadTasks() {
     }
   } catch (e) {
     console.error('Tasks load error:', e);
-    document.getElementById('tasks-tbody').innerHTML = '<tr><td colspan="5" class="text-muted">Fehler beim Laden</td></tr>';
+    document.getElementById('tasks-card-grid').innerHTML = '<div class="card" style="grid-column:1/-1"><span class="text-muted">Fehler beim Laden</span></div>';
   }
 }
 
 function toggleTaskView() {
-  taskViewMode = taskViewMode === 'table' ? 'kanban' : 'table';
-  document.getElementById('tasks-table-view').classList.toggle('hidden', taskViewMode !== 'table');
+  taskViewMode = taskViewMode === 'cards' ? 'kanban' : 'cards';
+  document.getElementById('tasks-cards-view').classList.toggle('hidden', taskViewMode !== 'cards');
   document.getElementById('tasks-kanban-view').classList.toggle('hidden', taskViewMode !== 'kanban');
   if (taskViewMode === 'kanban') loadKanban();
+  else loadTasks();
 }
 
 async function loadKanban() {
@@ -644,25 +656,31 @@ async function loadMCP() {
       grid.innerHTML = `<div class="card" style="grid-column:1/-1"><span class="text-muted">${msg}</span></div>`;
       return;
     }
-    grid.innerHTML = servers.map(s => `
-      <div class="card" id="mcp-card-${esc(s.id || s.name)}">
+    grid.innerHTML = servers.map(s => {
+      const isRunning = s.status === 'running';
+      const isError = s.status === 'error';
+      const dotClass = isRunning ? 'online' : '';
+      const statusLabel = s.status || (s.enabled ? 'stopped' : 'disabled');
+      return `
+      <div class="card" id="mcp-card-${esc(s.id || s.name)}" style="${isError ? 'border-left:3px solid #e74c3c' : ''}">
         <div class="card-header">
           <div style="display:flex;align-items:center;gap:8px">
-            <div class="status-dot ${s.status === 'connected' || s.enabled ? 'online' : ''}"></div>
+            <div class="status-dot ${dotClass}"></div>
             ${esc(s.name || s.id)}
           </div>
-          ${badge(s.status || (s.enabled ? 'active' : 'inactive'))}
+          ${badge(statusLabel)}
         </div>
         <div style="font-size:13px;color:var(--text-muted);margin-bottom:8px">${s.tools_count || 0} Tools verfuegbar</div>
         ${s.command ? `<div style="font-size:12px;color:var(--text-muted)">Cmd: ${esc(s.command)}</div>` : ''}
+        ${s.last_error ? `<div style="font-size:12px;color:#e74c3c;margin-top:4px;word-break:break-word">Fehler: ${esc(s.last_error)}</div>` : ''}
         <div class="mt-16" style="display:flex;gap:6px;flex-wrap:wrap">
           <button class="btn btn-sm" onclick="loadMCPTools('${esc(s.id || s.name)}')">Tools anzeigen</button>
           <button class="btn btn-sm" onclick="restartMCPServer('${esc(s.id || s.name)}')">Neustart</button>
           <button class="btn btn-sm" onclick="toggleMCPServer('${esc(s.id || s.name)}', ${!s.enabled})">${s.enabled ? 'Deaktivieren' : 'Aktivieren'}</button>
         </div>
         <div id="mcp-tools-${esc(s.id || s.name)}" class="mt-16 hidden"></div>
-      </div>
-    `).join('');
+      </div>`;
+    }).join('');
   } catch (e) {
     document.getElementById('mcp-grid').innerHTML = '<div class="card"><span class="text-muted">MCP nicht erreichbar</span></div>';
     console.error('MCP load error:', e);
@@ -831,8 +849,7 @@ async function saveSchedule() {
 function switchMemTab(tab) {
   currentMemTab = tab;
   document.querySelectorAll('[data-mem-tab]').forEach(b => {
-    b.classList.toggle('btn-primary', b.dataset.memTab === tab);
-    b.classList.toggle('btn-sm', true);
+    b.classList.toggle('active', b.dataset.memTab === tab);
   });
   renderMemoryCards();
 }
@@ -841,6 +858,7 @@ async function loadMemory() {
   try {
     const data = await api('/memory');
     _allMemories = data.memories || data.entries || data || [];
+    updateMemoryStats();
     renderMemoryCards();
   } catch (e) {
     document.getElementById('memory-content').innerHTML = '<span class="text-muted">Memory nicht verfuegbar</span>';
@@ -848,19 +866,47 @@ async function loadMemory() {
   }
 }
 
+function updateMemoryStats() {
+  const el = document.getElementById('memory-stats');
+  if (!el) return;
+  const total = _allMemories.length;
+  const categories = new Set(_allMemories.map(m => m.category).filter(Boolean));
+  // Find most recent entry
+  let latest = null;
+  _allMemories.forEach(m => {
+    if (m.updated_at || m.created_at) {
+      const d = new Date(m.updated_at || m.created_at);
+      if (!latest || d > latest) latest = d;
+    }
+  });
+  el.innerHTML = `
+    <span>Memories: <strong>${total}</strong></span>
+    <span>Zuletzt gelernt: <strong>${latest ? relTime(latest) : '--'}</strong></span>
+    <span>Aktive Kategorien: <strong>${categories.size}</strong></span>
+  `;
+}
+
+function toggleMemoryAddForm() {
+  document.getElementById('memory-add-form')?.classList.toggle('hidden');
+}
+
 function filterMemoryCards() {
+  renderMemoryCards();
+}
+
+let _collapsedCategories = {};
+
+function toggleMemCategory(key) {
+  _collapsedCategories[key] = !_collapsedCategories[key];
   renderMemoryCards();
 }
 
 function renderMemoryCards() {
   const el = document.getElementById('memory-content');
   const search = (document.getElementById('memory-search')?.value || '').toLowerCase();
-  const layerLabels = { user: 'Nutzer', self: 'Self', relationship: 'Beziehung' };
+  const layerAccent = { user: 'var(--accent)', self: 'var(--purple)', relationship: 'var(--green)' };
 
-  let entries = _allMemories;
-  if (currentMemTab !== 'all') {
-    entries = entries.filter(m => m.layer === currentMemTab);
-  }
+  let entries = _allMemories.filter(m => m.layer === currentMemTab);
   if (search) {
     entries = entries.filter(m =>
       (m.value || '').toLowerCase().includes(search) ||
@@ -874,29 +920,52 @@ function renderMemoryCards() {
     return;
   }
 
-  el.innerHTML = entries.map(m => {
-    const layerBadge = `<span style="font-size:10px;padding:2px 6px;border-radius:3px;background:var(--bg-tertiary);color:var(--text-muted);text-transform:uppercase">${esc(m.layer || '')}</span>`;
-    const catKey = [m.category, m.key].filter(Boolean).join(' / ');
+  // Group by category
+  const groups = {};
+  entries.forEach(m => {
+    const cat = m.category || 'Allgemein';
+    if (!groups[cat]) groups[cat] = [];
+    groups[cat].push(m);
+  });
+
+  const accent = layerAccent[currentMemTab] || 'var(--accent)';
+
+  el.innerHTML = Object.entries(groups).map(([cat, items]) => {
+    const collapseKey = currentMemTab + '::' + cat;
+    const collapsed = _collapsedCategories[collapseKey];
     return `
-    <div class="memory-card" id="mem-card-${m.id}" style="border:1px solid var(--border);border-radius:6px;padding:10px 12px;margin-bottom:8px">
-      <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
-        ${layerBadge}
-        <span style="font-size:12px;color:var(--text-muted);flex:1">${esc(catKey)}</span>
-        <button class="btn-icon" title="Bearbeiten" onclick="startEditMemory(${m.id})">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-        </button>
-        <button class="btn-icon" title="Loeschen" onclick="deleteMemory(${m.id})" style="color:var(--red,#e74c3c)">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
-        </button>
+    <div class="mem-category-group" style="border-left:3px solid ${accent}">
+      <div class="mem-category-header" onclick="toggleMemCategory('${esc(collapseKey)}')">
+        <span class="mem-collapse-icon">${collapsed ? '\u25B6' : '\u25BC'}</span>
+        <span>${esc(cat)}</span>
+        <span class="mem-category-count">${items.length}</span>
       </div>
-      <div id="mem-value-${m.id}" style="font-size:13px;line-height:1.5">${esc(m.value || '')}</div>
-      <div id="mem-edit-${m.id}" style="display:none;margin-top:6px">
-        <textarea id="mem-textarea-${m.id}" style="width:100%;min-height:60px;background:var(--bg-secondary);color:var(--text-primary);border:1px solid var(--border);border-radius:4px;padding:6px;font-size:13px;resize:vertical">${esc(m.value || '')}</textarea>
-        <div style="display:flex;gap:6px;margin-top:4px">
-          <button class="btn btn-primary btn-sm" onclick="saveEditMemory(${m.id})">Speichern</button>
-          <button class="btn btn-sm" onclick="cancelEditMemory(${m.id})">Abbrechen</button>
-        </div>
-      </div>
+      ${collapsed ? '' : `<div class="mem-category-items">
+        ${items.map(m => `
+          <div class="mem-entry" id="mem-card-${m.id}">
+            <div class="mem-entry-header">
+              <span class="mem-entry-key">${esc(m.key || '')}</span>
+              <div class="mem-entry-actions">
+                <button class="btn-icon" title="Bearbeiten" onclick="startEditMemory(${m.id})">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                </button>
+                <button class="btn-icon" title="Loeschen" onclick="deleteMemory(${m.id})" style="color:var(--red)">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                </button>
+              </div>
+            </div>
+            <div id="mem-value-${m.id}" class="mem-entry-value">${esc(m.value || '')}</div>
+            ${m.updated_at ? `<div class="mem-entry-time">Aktualisiert: ${relTime(m.updated_at)}</div>` : ''}
+            <div id="mem-edit-${m.id}" style="display:none;margin-top:6px">
+              <textarea id="mem-textarea-${m.id}" class="mem-edit-textarea">${esc(m.value || '')}</textarea>
+              <div style="display:flex;gap:6px;margin-top:4px">
+                <button class="btn btn-primary btn-sm" onclick="saveEditMemory(${m.id})">Speichern</button>
+                <button class="btn btn-sm" onclick="cancelEditMemory(${m.id})">Abbrechen</button>
+              </div>
+            </div>
+          </div>
+        `).join('')}
+      </div>`}
     </div>`;
   }).join('');
 }
@@ -934,20 +1003,24 @@ async function saveEditMemory(id) {
 async function addMemory() {
   const input = document.getElementById('memory-input');
   const category = document.getElementById('memory-category');
+  const keyInput = document.getElementById('memory-key-input');
   const layerEl = document.getElementById('memory-layer');
   const value = input.value.trim();
-  if (!value) return;
+  if (!value) { showToast('Wert fehlt'); return; }
   const layer = layerEl?.value || 'user';
   const cat = category?.value.trim() || 'general';
+  const key = keyInput?.value.trim() || cat;
   try {
     const result = await api('/memory', {
       method: 'POST',
-      body: JSON.stringify({ value, layer, category: cat, key: cat }),
+      body: JSON.stringify({ value, layer, category: cat, key }),
     });
     input.value = '';
     if (category) category.value = '';
+    if (keyInput) keyInput.value = '';
     const action = result.action === 'updated' ? 'Eintrag aktualisiert (Duplikat erkannt)' : 'Eintrag gespeichert';
     showToast(action);
+    toggleMemoryAddForm();
     loadMemory();
   } catch (e) { showToast('Fehler: ' + e.message); }
 }

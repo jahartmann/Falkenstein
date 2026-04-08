@@ -122,14 +122,11 @@
             <option value="failed">Fehlgeschlagen</option>
           </select>
           <input type="text" id="task-search" placeholder="Suchen..." oninput="debouncedLoadTasks()">
-          <button class="btn" onclick="toggleTaskView()">Kanban / Tabelle</button>
+          <button class="btn" onclick="toggleTaskView()">Kanban</button>
           <button class="btn btn-primary" onclick="openModal('task-modal')">+ Neuer Task</button>
         </div>
-        <div id="tasks-table-view">
-          <table>
-            <thead><tr><th>Task</th><th>Status</th><th>Agent</th><th>Erstellt</th><th>Aktionen</th></tr></thead>
-            <tbody id="tasks-tbody"></tbody>
-          </table>
+        <div id="tasks-cards-view">
+          <div class="card-grid" id="tasks-card-grid"><span class="text-muted">Lade...</span></div>
           <div class="pagination" id="tasks-pagination"></div>
         </div>
         <div id="tasks-kanban-view" class="hidden"></div>
@@ -148,38 +145,59 @@
 
       <!-- ========== Memory ========== -->
       <section class="section" id="section-memory">
-        <div class="card">
-          <div class="card-header">
-            Memory
-            <button class="btn btn-sm" onclick="loadMemory()">Aktualisieren</button>
-          </div>
+        <!-- Stats bar -->
+        <div class="mem-stats-bar" id="memory-stats">
+          <span>Memories: <strong>--</strong></span>
+          <span>Zuletzt gelernt: <strong>--</strong></span>
+          <span>Aktive Kategorien: <strong>--</strong></span>
+        </div>
 
-          <!-- Layer tabs + search -->
-          <div class="filter-bar" style="margin-bottom:12px">
-            <button class="btn btn-sm btn-primary" data-mem-tab="all" onclick="switchMemTab('all')">Alle</button>
-            <button class="btn btn-sm" data-mem-tab="user" onclick="switchMemTab('user')">Nutzer</button>
-            <button class="btn btn-sm" data-mem-tab="self" onclick="switchMemTab('self')">Self</button>
-            <button class="btn btn-sm" data-mem-tab="relationship" onclick="switchMemTab('relationship')">Beziehung</button>
-            <input type="text" id="memory-search" placeholder="Suchen..." oninput="filterMemoryCards()" style="flex:1;min-width:120px">
-          </div>
+        <!-- Layer tabs -->
+        <div class="mem-tabs">
+          <button class="mem-tab active" data-mem-tab="user" onclick="switchMemTab('user')">Ueber Janik</button>
+          <button class="mem-tab" data-mem-tab="self" onclick="switchMemTab('self')">Ueber mich</button>
+          <button class="mem-tab" data-mem-tab="relationship" onclick="switchMemTab('relationship')">Beziehung</button>
+          <button class="btn btn-sm btn-primary" onclick="toggleMemoryAddForm()" title="Neuer Eintrag" style="margin-left:auto">+</button>
+          <button class="btn btn-sm" onclick="loadMemory()" style="margin-left:4px">Aktualisieren</button>
+        </div>
 
-          <!-- Memory cards -->
-          <div id="memory-content"><span class="text-muted">Lade...</span></div>
-
-          <!-- Add new memory -->
-          <div class="mt-16" style="border-top:1px solid var(--border);padding-top:12px">
-            <div style="display:grid;grid-template-columns:1fr 1fr 2fr auto;gap:8px;align-items:center">
-              <select id="memory-layer" style="height:32px;padding:0 8px;background:var(--bg-secondary);color:var(--text-primary);border:1px solid var(--border);border-radius:4px">
-                <option value="user">Nutzer</option>
-                <option value="self">Self</option>
+        <!-- Add new memory (hidden by default) -->
+        <div id="memory-add-form" class="mem-add-form hidden">
+          <div class="mem-add-grid">
+            <div>
+              <label>Layer</label>
+              <select id="memory-layer">
+                <option value="user">Ueber Janik</option>
+                <option value="self">Ueber mich</option>
                 <option value="relationship">Beziehung</option>
               </select>
-              <input type="text" id="memory-category" placeholder="Kategorie" style="height:32px;background:var(--bg-secondary);color:var(--text-primary);border:1px solid var(--border);border-radius:4px;padding:0 8px">
-              <input type="text" id="memory-input" placeholder="Eintrag..." style="height:32px;background:var(--bg-secondary);color:var(--text-primary);border:1px solid var(--border);border-radius:4px;padding:0 8px">
-              <button class="btn btn-primary btn-sm" onclick="addMemory()">+ Hinzufuegen</button>
+            </div>
+            <div>
+              <label>Kategorie</label>
+              <input type="text" id="memory-category" placeholder="z.B. Praeferenzen, Skills...">
+            </div>
+            <div>
+              <label>Key</label>
+              <input type="text" id="memory-key-input" placeholder="z.B. Sprache, Editor...">
+            </div>
+            <div>
+              <label>Wert</label>
+              <input type="text" id="memory-input" placeholder="z.B. Deutsch, VS Code...">
             </div>
           </div>
+          <div style="margin-top:8px;text-align:right">
+            <button class="btn btn-primary btn-sm" onclick="addMemory()">Speichern</button>
+            <button class="btn btn-sm" onclick="toggleMemoryAddForm()">Abbrechen</button>
+          </div>
         </div>
+
+        <!-- Search -->
+        <div style="margin-bottom:16px">
+          <input type="text" id="memory-search" placeholder="Memories durchsuchen..." oninput="filterMemoryCards()" style="width:100%;padding:9px 14px;border:1px solid var(--border);border-radius:8px;background:var(--bg-secondary);color:var(--text);font-size:13px">
+        </div>
+
+        <!-- Memory content (grouped cards) -->
+        <div id="memory-content"><span class="text-muted">Lade...</span></div>
       </section>
 
       <!-- ========== Obsidian ========== -->
