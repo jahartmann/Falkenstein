@@ -42,7 +42,16 @@ function agentBadge(type) {
 
 function relTime(dateStr) {
   if (!dateStr) return '\u2014';
-  const d = new Date(dateStr);
+  // Handle Unix timestamps in seconds (e.g. from Python stat.st_mtime)
+  let d;
+  if (typeof dateStr === 'number' || (typeof dateStr === 'string' && /^\d+(\.\d+)?$/.test(dateStr))) {
+    const ts = parseFloat(dateStr);
+    // If value looks like seconds (< year 3000 in ms), multiply to get ms
+    d = new Date(ts < 1e12 ? ts * 1000 : ts);
+  } else {
+    d = new Date(dateStr);
+  }
+  if (isNaN(d.getTime())) return '\u2014';
   const diff = (Date.now() - d.getTime()) / 1000;
   if (diff < 60) return 'gerade eben';
   if (diff < 3600) return Math.floor(diff / 60) + ' Min';
@@ -338,7 +347,7 @@ async function loadDashboardSchedules() {
 async function loadDashboardMCP() {
   try {
     const data = await api('/mcp/servers');
-    const servers = data.servers || data || [];
+    const servers = Array.isArray(data) ? data : (data.servers || []);
     const el = document.getElementById('dash-mcp');
     if (Array.isArray(servers) && servers.length > 0) {
       el.innerHTML = servers.map(s =>
@@ -623,10 +632,15 @@ async function submitTask() {
 async function loadMCP() {
   try {
     const data = await api('/mcp/servers');
-    const servers = data.servers || data || [];
+    // Support both {servers: [...], bridge_initialized: bool} and legacy bare array
+    const servers = Array.isArray(data) ? data : (data.servers || []);
+    const bridgeInitialized = Array.isArray(data) ? true : (data.bridge_initialized !== false);
     const grid = document.getElementById('mcp-grid');
     if (!Array.isArray(servers) || servers.length === 0) {
-      grid.innerHTML = '<div class="card" style="grid-column:1/-1"><span class="text-muted">Keine MCP Server konfiguriert</span></div>';
+      const msg = !bridgeInitialized
+        ? 'MCP Bridge nicht initialisiert (MCP_SERVERS in .env leer?)'
+        : 'Keine MCP Server konfiguriert';
+      grid.innerHTML = `<div class="card" style="grid-column:1/-1"><span class="text-muted">${msg}</span></div>`;
       return;
     }
     grid.innerHTML = servers.map(s => `
@@ -968,7 +982,15 @@ const CONFIG_LABELS = {
 async function loadConfig() {
   try {
     const data = await api('/config');
-    const config = data.config || data || {};
+    // Backend returns {config: [{key, value, category, description}, ...]}
+    // Convert list → plain {key: value} map for easy lookup
+    const rawConfig = data.config || data || {};
+    let config = {};
+    if (Array.isArray(rawConfig)) {
+      rawConfig.forEach(entry => { if (entry.key) config[entry.key] = entry.value ?? ''; });
+    } else if (typeof rawConfig === 'object') {
+      config = rawConfig;
+    }
     const container = document.getElementById('config-container');
 
     container.innerHTML = Object.entries(CONFIG_GROUPS).map(([group, keys]) => {
@@ -1002,7 +1024,7 @@ async function saveConfigGroup(btn, group) {
   try {
     await api('/config', {
       method: 'PUT',
-      body: JSON.stringify(updates),
+      body: JSON.stringify({ updates }),
     });
     showToast(group + ' gespeichert');
   } catch (e) { showToast('Fehler: ' + e.message); }

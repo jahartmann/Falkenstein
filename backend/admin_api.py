@@ -975,21 +975,25 @@ async def update_server():
 @router.get("/mcp/servers")
 async def list_mcp_servers():
     if _mcp_bridge is None:
-        return []
-    return [
-        {
-            "id": s.config.id,
-            "name": s.config.name,
-            "enabled": s.config.enabled,
-            "status": s.status,
-            "pid": s.pid,
-            "tools_count": s.tools_count,
-            "last_call": str(s.last_call) if s.last_call else None,
-            "uptime_seconds": s.uptime_seconds,
-            "last_error": s.last_error,
-        }
-        for s in _mcp_bridge.servers
-    ]
+        return {"servers": [], "bridge_initialized": False}
+    return {
+        "bridge_initialized": True,
+        "servers": [
+            {
+                "id": s.config.id,
+                "name": s.config.name,
+                "command": s.config.command,
+                "enabled": s.config.enabled,
+                "status": s.status,
+                "pid": s.pid,
+                "tools_count": s.tools_count,
+                "last_call": str(s.last_call) if s.last_call else None,
+                "uptime_seconds": s.uptime_seconds,
+                "last_error": s.last_error,
+            }
+            for s in _mcp_bridge.servers
+        ],
+    }
 
 @router.get("/mcp/servers/{server_id}/tools")
 async def get_mcp_server_tools(server_id: str):
