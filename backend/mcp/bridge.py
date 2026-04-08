@@ -44,7 +44,10 @@ class MCPBridge:
         if self._health_task:
             self._health_task.cancel()
         for sid in list(self._sessions.keys()):
-            await self._stop_server(sid)
+            try:
+                await self._stop_server(sid)
+            except Exception as e:
+                log.warning("Error stopping %s: %s", sid, e)
 
     async def _start_server(self, server_id: str) -> None:
         status = self.registry.get(server_id)
@@ -75,18 +78,14 @@ class MCPBridge:
         log.info("MCP server %s started with %d tools", server_id, len(tool_schemas))
 
     async def _stop_server(self, server_id: str) -> None:
-        session = self._sessions.pop(server_id, None)
-        if session:
-            try:
-                await session.__aexit__(None, None, None)
-            except Exception as e:
-                log.warning("Error closing session for %s: %s", server_id, e)
+        self._sessions.pop(server_id, None)
         ctx = self._contexts.pop(server_id, None)
-        if ctx:
+        # Kill the subprocess directly instead of using __aexit__ (avoids cancel scope errors)
+        if ctx and hasattr(ctx, '_process'):
             try:
-                await ctx.__aexit__(None, None, None)
-            except Exception as e:
-                log.warning("Error closing context for %s: %s", server_id, e)
+                ctx._process.terminate()
+            except Exception:
+                pass
         self._tool_cache.pop(server_id, None)
         self._start_times.pop(server_id, None)
         self.registry.update_status(server_id, status="stopped", pid=None, tools_count=0)

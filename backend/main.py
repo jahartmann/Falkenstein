@@ -194,6 +194,7 @@ async def lifespan(app: FastAPI):
     )
 
     # ── MCP Bridge ────────────────────────────────────────────────────
+    vault_path_str = str(settings.obsidian_vault_path) if settings.obsidian_vault_path else ""
     mcp_registry = MCPRegistry.from_settings(
         server_ids=settings.mcp_servers,
         enabled_flags={
@@ -202,6 +203,9 @@ async def lifespan(app: FastAPI):
             "mcp-obsidian": settings.mcp_obsidian_enabled,
         },
         node_path=settings.mcp_node_path,
+        extra_args={
+            "mcp-obsidian": [vault_path_str] if vault_path_str else [],
+        },
     )
     mcp_bridge = MCPBridge(mcp_registry)
     try:

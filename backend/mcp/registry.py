@@ -4,7 +4,7 @@ from backend.mcp.config import MCPServerConfig, ServerStatus
 
 KNOWN_SERVERS: dict[str, dict] = {
     "apple-mcp": {"name": "Apple Services", "command": "npx", "args": ["-y", "apple-mcp"]},
-    "desktop-commander": {"name": "Desktop Commander", "command": "npx", "args": ["-y", "@anthropic/desktop-commander"]},
+    "desktop-commander": {"name": "Desktop Commander", "command": "npx", "args": ["-y", "desktop-commander-mcp"]},
     "mcp-obsidian": {"name": "Obsidian Vault", "command": "npx", "args": ["-y", "mcp-obsidian"]},
 }
 
@@ -59,6 +59,8 @@ class MCPRegistry:
         server_ids: str,
         enabled_flags: dict[str, bool],
         node_path: str = "npx",
+        extra_args: dict[str, list[str]] | None = None,
+        extra_env: dict[str, dict[str, str]] | None = None,
     ) -> MCPRegistry:
         reg = cls()
         for sid in server_ids.split(","):
@@ -66,11 +68,19 @@ class MCPRegistry:
             if not sid:
                 continue
             known = KNOWN_SERVERS.get(sid, {})
+            args = list(known.get("args", ["-y", sid]))
+            # Append extra args for this server
+            if extra_args and sid in extra_args:
+                args.extend(extra_args[sid])
+            env = {}
+            if extra_env and sid in extra_env:
+                env = extra_env[sid]
             config = MCPServerConfig(
                 id=sid,
                 name=known.get("name", sid),
                 command=node_path,
-                args=known.get("args", ["-y", sid]),
+                args=args,
+                env=env,
                 enabled=enabled_flags.get(sid, True),
             )
             reg.register(config)
