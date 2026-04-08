@@ -88,7 +88,11 @@ class MCPBridge:
                 env=cfg.env or None,
             )
             try:
-                async with stdio_client(params, errlog=sys.stderr) as (read_stream, write_stream):
+                # errlog param added in newer MCP SDK versions
+                import inspect
+                _sig = inspect.signature(stdio_client)
+                _kw = {"errlog": sys.stderr} if "errlog" in _sig.parameters else {}
+                async with stdio_client(params, **_kw) as (read_stream, write_stream):
                     async with ClientSession(read_stream, write_stream) as session:
                         init_result = await session.initialize()
                         tools_result = await session.list_tools()
