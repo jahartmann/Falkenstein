@@ -84,7 +84,33 @@ else
     echo -e "${YELLOW}Hinweis: Ollama nicht installiert. Siehe https://ollama.ai${NC}"
 fi
 
-# 7. Git-Pull Watcher (background): checks every 60s, restarts server on changes
+# 7. Cleanup & Process Management
+_kill_server() {
+    # Kill server process + all children (MCP subprocesses etc.)
+    if [ -n "$SERVER_PID" ] && kill -0 $SERVER_PID 2>/dev/null; then
+        kill $SERVER_PID 2>/dev/null
+        for i in 1 2 3; do
+            kill -0 $SERVER_PID 2>/dev/null || break
+            sleep 1
+        done
+        kill -9 $SERVER_PID 2>/dev/null
+    fi
+    # Kill any orphaned backend.main or MCP node processes from this project
+    _kill_orphans
+}
+
+_kill_orphans() {
+    # Orphaned Python server processes
+    pgrep -f "python.*backend\.main" 2>/dev/null | while read pid; do
+        [ "$pid" != "$$" ] && [ "$pid" != "$SERVER_PID" ] && kill -9 "$pid" 2>/dev/null
+    done
+    # Orphaned MCP node processes spawned by us (apple-mcp, mcp-obsidian, desktop-commander)
+    pgrep -f "node.*(apple-mcp|mcp-obsidian|desktop-commander)" 2>/dev/null | xargs kill -9 2>/dev/null
+    # Port cleanup
+    lsof -ti:${PORT:-8080} 2>/dev/null | xargs kill -9 2>/dev/null
+}
+
+# 8. Git-Pull Watcher (background): checks every 60s, restarts server on changes
 _git_watch() {
     while true; do
         sleep 60
@@ -94,20 +120,23 @@ _git_watch() {
         if [ "$OLD_HEAD" != "$NEW_HEAD" ]; then
             echo -e "\n${GREEN}[Git] Neue Änderungen gezogen. Server wird neugestartet...${NC}"
             source "$VENV_DIR/bin/activate" && pip install -q -r requirements.txt 2>/dev/null
-            kill -9 $SERVER_PID 2>/dev/null
+            _kill_server
         fi
     done
 }
 
-# 8. Start (auto-restart loop)
+# 9. Start (auto-restart loop)
 PORT=$(grep FRONTEND_PORT .env 2>/dev/null | cut -d= -f2 || echo 8080)
+
+# Kill zombies from previous runs before starting
+_kill_orphans
 echo -e "${GREEN}Starte Falkenstein auf Port ${PORT}...${NC}"
 echo -e "Dashboard: http://localhost:${PORT}"
 echo -e "Büro:      http://localhost:${PORT}/office"
 echo ""
 
-# Trap SIGINT (Ctrl+C) to kill watcher and exit cleanly
-trap 'echo -e "\n${YELLOW}Server gestoppt.${NC}"; kill $WATCHER_PID 2>/dev/null; exit 0' INT
+# Trap SIGINT/SIGTERM to clean up properly
+trap 'echo -e "\n${YELLOW}Server gestoppt.${NC}"; _kill_server; kill $WATCHER_PID 2>/dev/null; exit 0' INT TERM
 
 while true; do
     python -m backend.main &
@@ -123,5 +152,6 @@ while true; do
     EXIT_CODE=$?
 
     echo -e "\n${YELLOW}Server beendet (Exit $EXIT_CODE). Neustart in 2s...${NC}"
+    _kill_orphans
     sleep 2
 done
