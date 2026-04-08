@@ -1018,24 +1018,40 @@ async def update_server():
 async def list_mcp_servers():
     if _mcp_bridge is None:
         return {"servers": [], "bridge_initialized": False}
-    return {
-        "bridge_initialized": True,
-        "servers": [
-            {
-                "id": s.config.id,
-                "name": s.config.name,
-                "command": s.config.command,
-                "enabled": s.config.enabled,
-                "status": s.status,
-                "pid": s.pid,
-                "tools_count": s.tools_count,
-                "last_call": str(s.last_call) if s.last_call else None,
-                "uptime_seconds": s.uptime_seconds,
-                "last_error": s.last_error,
-            }
-            for s in _mcp_bridge.servers
-        ],
-    }
+    try:
+        servers = []
+        for s in _mcp_bridge.servers:
+            try:
+                servers.append({
+                    "id": s.config.id,
+                    "name": s.config.name,
+                    "command": s.config.command,
+                    "enabled": s.config.enabled,
+                    "status": s.status,
+                    "pid": s.pid,
+                    "tools_count": s.tools_count,
+                    "last_call": str(s.last_call) if s.last_call else None,
+                    "uptime_seconds": s.uptime_seconds,
+                    "last_error": s.last_error,
+                })
+            except Exception as e:
+                servers.append({
+                    "id": getattr(s.config, "id", "unknown"),
+                    "name": getattr(s.config, "name", "unknown"),
+                    "command": getattr(s.config, "command", ""),
+                    "enabled": False,
+                    "status": "error",
+                    "pid": None,
+                    "tools_count": 0,
+                    "last_call": None,
+                    "uptime_seconds": 0,
+                    "last_error": f"Serialization error: {e}",
+                })
+        return {"bridge_initialized": True, "servers": servers}
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error("list_mcp_servers error: %s", e, exc_info=True)
+        return {"bridge_initialized": True, "servers": [], "error": str(e)}
 
 @router.get("/mcp/servers/{server_id}/tools")
 async def get_mcp_server_tools(server_id: str):

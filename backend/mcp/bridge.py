@@ -30,7 +30,10 @@ class MCPBridge:
         return self.registry.list_servers()
 
     async def start(self) -> None:
-        for s in self.registry.list_enabled():
+        for s in self.registry.list_servers():
+            if not s.config.enabled:
+                self.registry.update_status(s.config.id, status="disabled")
+                continue
             try:
                 await self._start_server(s.config.id)
             except Exception as e:

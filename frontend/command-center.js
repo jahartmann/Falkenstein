@@ -645,10 +645,20 @@ async function submitTask() {
 async function loadMCP() {
   try {
     const data = await api('/mcp/servers');
+    const grid = document.getElementById('mcp-grid');
+    // Handle API error responses (e.g. 500, missing field)
+    if (data && data.detail) {
+      grid.innerHTML = `<div class="card" style="grid-column:1/-1"><span class="text-muted">API-Fehler: ${esc(String(data.detail))}</span></div>`;
+      return;
+    }
     // Support both {servers: [...], bridge_initialized: bool} and legacy bare array
     const servers = Array.isArray(data) ? data : (data.servers || []);
     const bridgeInitialized = Array.isArray(data) ? true : (data.bridge_initialized !== false);
-    const grid = document.getElementById('mcp-grid');
+    // Show backend error if returned
+    if (data && data.error && servers.length === 0) {
+      grid.innerHTML = `<div class="card" style="grid-column:1/-1"><span class="text-muted">MCP-Fehler: ${esc(data.error)}</span></div>`;
+      return;
+    }
     if (!Array.isArray(servers) || servers.length === 0) {
       const msg = !bridgeInitialized
         ? 'MCP Bridge nicht initialisiert (MCP_SERVERS in .env leer?)'
