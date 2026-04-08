@@ -18,10 +18,18 @@ const CREW_SKINS = {
 
 // Abstract animation name -> sprite animation key suffix
 const ANIMATION_MAP = {
-  typing:   'sit',
-  reading:  'phone',
-  thinking: 'idle_anim',
-  running:  'run',
+  typing:       'sit',
+  reading:      'phone',
+  thinking:     'idle_anim',
+  running:      'run',
+  // MCP tool animations
+  mcp_reminder: 'phone',
+  mcp_calendar: 'phone',
+  mcp_music:    'idle_anim',
+  mcp_homekit:  'sit',
+  mcp_notes:    'sit',
+  mcp_shell:    'sit',
+  mcp_default:  'idle_anim',
 };
 
 // Real agent type -> sprite + room mapping
@@ -434,21 +442,32 @@ export class AgentManager {
     const agent = this.agents.get(crewId);
     if (!agent || agent.state === 'leaving') return;
 
-    // Map abstract animation name; fall back to sit (typing) if unknown
-    const animKey = ANIMATION_MAP[animation] || 'sit';
+    // MCP tool detection: override animHint with specific mcp key
+    let animKey = animation;
+    if (toolName && toolName.startsWith('mcp_')) {
+      if (toolName.includes('reminder') || toolName.includes('calendar')) animKey = 'mcp_reminder';
+      else if (toolName.includes('music')) animKey = 'mcp_music';
+      else if (toolName.includes('homekit') || toolName.includes('light')) animKey = 'mcp_homekit';
+      else if (toolName.includes('note')) animKey = 'mcp_notes';
+      else if (toolName.includes('shell') || toolName.includes('command')) animKey = 'mcp_shell';
+      else animKey = 'mcp_default';
+    }
 
-    if (animKey === 'sit') {
+    // Map abstract animation name; fall back to sit (typing) if unknown
+    const resolvedAnimKey = ANIMATION_MAP[animKey] || 'sit';
+
+    if (resolvedAnimKey === 'sit') {
       agent.sprite.anims.play(`${agent.spriteName}_sit`, true);
-    } else if (animKey === 'phone') {
+    } else if (resolvedAnimKey === 'phone') {
       agent.sprite.anims.play(`${agent.spriteName}_phone`, true);
-    } else if (animKey === 'idle_anim') {
+    } else if (resolvedAnimKey === 'idle_anim') {
       agent.sprite.anims.play(`${agent.spriteName}_idle_down`, true);
-    } else if (animKey === 'run') {
+    } else if (resolvedAnimKey === 'run') {
       // No specific destination — play walk animation in place facing down
       agent.sprite.anims.play(`${agent.spriteName}_walk_down`, true);
     }
 
-    agent.task = toolName || task;
+    agent.task = toolName || '';
   }
 
   onAgentDone(crewType, crewId) {

@@ -1,3 +1,25 @@
+/* ── Activity Feed ── */
+
+const feedEntries = [];
+const FEED_MAX = 8;
+let feedFadeTimer = null;
+
+function addFeedEntry(icon, text) {
+  const time = new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+  feedEntries.unshift({ icon, text, time });
+  if (feedEntries.length > FEED_MAX) feedEntries.pop();
+  const el = document.getElementById('feed-entries');
+  if (el) el.innerHTML = feedEntries.map(e =>
+    `<div class="feed-entry"><span class="feed-time">${e.time}</span><span>${e.icon} ${e.text}</span></div>`
+  ).join('');
+  const feed = document.getElementById('activity-feed');
+  if (feed) {
+    feed.classList.remove('faded');
+    clearTimeout(feedFadeTimer);
+    feedFadeTimer = setTimeout(() => feed.classList.add('faded'), 10000);
+  }
+}
+
 export class OfficeWS {
   constructor(agentManager, bubbleManager, hud) {
     this.am = agentManager;
@@ -42,21 +64,36 @@ export class OfficeWS {
       case 'agent_spawned':
         this.am.spawnAgent(msg.agent_id, msg.agent_type || 'coder', msg.task || '');
         this.bm.showBubble(msg.agent_id, msg.task || 'Gestartet...');
+        addFeedEntry('🤖', (msg.agent_type || 'Agent') + ' gestartet');
         break;
 
       // CrewAI EventBus events (flat format — no data wrapper)
-      case 'agent_spawn':
+      case 'agent_spawn': {
+        const crew = msg.crew || msg.crew_id || 'Agent';
         this.am.onAgentSpawn(msg.crew, msg.crew_id, msg.task || '');
         this.bm.showBubble(msg.crew_id, msg.task || 'Gestartet...');
+        addFeedEntry('🤖', crew + ' gestartet');
         break;
+      }
 
-      case 'tool_use':
-        this.am.onToolUse(msg.agent, msg.tool, msg.animation, msg.crew_id);
+      case 'tool_use': {
+        const toolName = msg.tool || msg.tool_name || '';
+        let bubbleText = msg.tool_name || msg.label || toolName;
+        if (bubbleText.startsWith('mcp_')) {
+          const icons = { reminder: '⏰', calendar: '📅', music: '🎵', homekit: '💡', note: '📝', shell: '💻' };
+          for (const [key, icon] of Object.entries(icons)) {
+            if (bubbleText.includes(key)) { bubbleText = `${icon} ${bubbleText.split('_').pop()}`; break; }
+          }
+        }
+        this.am.onToolUse(msg.agent, toolName, msg.animation, msg.crew_id);
+        addFeedEntry('🔧', toolName || bubbleText);
         break;
+      }
 
       // Legacy agent_done/agent_error (with agent_id) handled above.
       // CrewAI crew events use crew_id — check for it:
-      case 'agent_done':
+      case 'agent_done': {
+        const crew = msg.crew || msg.crew_id || 'Agent';
         if (msg.crew_id) {
           this.bm.showBubble(msg.crew_id, '\u2705 Fertig!');
           this.am.onAgentDone(msg.crew, msg.crew_id);
@@ -64,9 +101,12 @@ export class OfficeWS {
           this.bm.showBubble(msg.agent_id, '\u2705 Fertig!');
           setTimeout(() => this.am.removeAgent(msg.agent_id), 3000);
         }
+        addFeedEntry('✅', crew + ' fertig');
         break;
+      }
 
-      case 'agent_error':
+      case 'agent_error': {
+        const crew = msg.crew || msg.crew_id || 'Agent';
         if (msg.crew_id) {
           this.bm.showBubble(msg.crew_id, '\u274C ' + (msg.error || 'Fehler!'));
           this.am.onAgentError(msg.crew, msg.crew_id, msg.error);
@@ -74,7 +114,9 @@ export class OfficeWS {
           this.bm.showBubble(msg.agent_id, '\u274C Fehler!');
           setTimeout(() => this.am.removeAgent(msg.agent_id), 3000);
         }
+        addFeedEntry('❌', crew + ' Fehler');
         break;
+      }
 
       case 'agent_progress':
         this.am.updateAgentStatus(msg.agent_id, msg.label || msg.tool || '');
