@@ -33,6 +33,16 @@ CREW_KEYWORDS = {
 # Higher priority crew types first (more specific keywords)
 CREW_PRIORITY = ["web_design", "swift", "ki_expert", "analyst", "ops", "researcher", "coder", "writer"]
 
+MCP_KEYWORDS = {
+    "erinner", "reminder", "erinnerung",
+    "licht", "light", "lampe",
+    "musik", "music", "spiel", "play", "pause", "stop",
+    "kalender", "calendar", "termin", "event",
+    "notiz", "note",
+    "homekit", "smart home", "heizung", "thermostat",
+    "timer", "wecker", "alarm",
+}
+
 
 class RuleEngine:
     def route(self, message: str) -> RouteResult:
@@ -41,11 +51,14 @@ class RuleEngine:
         for pattern in QUICK_REPLY_PATTERNS:
             if pattern.search(text):
                 return RouteResult(action="quick_reply")
-        # 2. Crew keyword matching
+        # 2. MCP keyword matching (before crew, after quick_reply)
         text_lower = text.lower()
+        if any(kw in text_lower for kw in MCP_KEYWORDS):
+            return RouteResult(action="direct_mcp", crew_type=None)
+        # 3. Crew keyword matching
         for crew_type in CREW_PRIORITY:
             for kw in CREW_KEYWORDS[crew_type]:
                 if kw in text_lower:
                     return RouteResult(action="crew", crew_type=crew_type)
-        # 3. No match
+        # 4. No match
         return RouteResult(action="classify")

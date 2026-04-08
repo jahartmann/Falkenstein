@@ -30,12 +30,14 @@ CREW_CLASSES = {
 }
 
 class FalkensteinFlow:
-    def __init__(self, event_bus, native_ollama, vault_index, settings, tools: dict):
+    def __init__(self, event_bus, native_ollama, vault_index, settings, tools: dict,
+                 mcp_bridge=None):
         self.event_bus = event_bus
         self.ollama = native_ollama
         self.vault_index = vault_index
         self.settings = settings
         self.tools = tools  # dict of crew_type -> list of CrewAI tool instances
+        self.mcp_bridge = mcp_bridge
         self.rule_engine = RuleEngine()
         self.input_guard = InputGuard()
         self.consolidator = PromptConsolidator()
@@ -55,6 +57,8 @@ class FalkensteinFlow:
         if route.action == "quick_reply":
             # No vault context for quick replies — keep it fast
             return await self.ollama.quick_reply(message, context="Antworte kurz und direkt auf Deutsch.")
+        if route.action == "direct_mcp" and self.mcp_bridge:
+            return await self._handle_direct_mcp(message, chat_id)
         if route.action == "crew" and route.crew_type:
             crew_type = route.crew_type
         else:
@@ -79,6 +83,19 @@ class FalkensteinFlow:
             llm_model=llm_model, fc_llm=fc_llm if crew_type not in ("writer", "ops", "premium") else None,
         )
         return await crew.run()
+
+    async def _handle_direct_mcp(self, message: str, chat_id: int | None = None) -> str:
+        try:
+            mcp_intent = await self.ollama.classify_mcp(message)
+            server_id = mcp_intent.get("server_id")
+            tool_name = mcp_intent.get("tool_name")
+            args = mcp_intent.get("args", {})
+            if not server_id or not tool_name:
+                return await self._run_crew("ops", message, chat_id)
+            result = await self.mcp_bridge.call_tool(server_id, tool_name, args)
+            return result.output if result.success else f"Fehler: {result.output}"
+        except Exception as e:
+            return f"MCP Fehler: {e}"
 
     async def handle_scheduled(self, task: dict) -> str:
         description = task.get("prompt", task.get("title", ""))
