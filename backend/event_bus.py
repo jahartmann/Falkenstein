@@ -32,6 +32,22 @@ TOOL_TO_ANIMATION: dict[str, str] = {
 }
 
 
+def should_stream_to_telegram(tool_name: str) -> bool:
+    """Check if a tool's output should be streamed to Telegram."""
+    if tool_name in STREAM_TO_TELEGRAM:
+        return True
+    return tool_name.startswith("mcp_")
+
+
+def get_tool_animation(tool_name: str) -> str:
+    """Get the Phaser animation hint for a tool."""
+    if tool_name in TOOL_TO_ANIMATION:
+        return TOOL_TO_ANIMATION[tool_name]
+    if tool_name.startswith("mcp_"):
+        return "thinking"
+    return "typing"
+
+
 class FalkensteinEventBus:
     """Central event hub bridging CrewAI callbacks to WebSocket, Telegram, and DB."""
 
@@ -89,7 +105,7 @@ class FalkensteinEventBus:
         duration_ms: int = 0,
     ) -> None:
         """Called after a tool finishes. Broadcasts WS, optionally streams to Telegram, logs to DB."""
-        animation = TOOL_TO_ANIMATION.get(tool_name, "thinking")
+        animation = get_tool_animation(tool_name)
 
         await self.ws_manager.broadcast(
             {
@@ -101,7 +117,7 @@ class FalkensteinEventBus:
             }
         )
 
-        if tool_name in STREAM_TO_TELEGRAM and tool_output:
+        if should_stream_to_telegram(tool_name) and tool_output:
             truncated = str(tool_output)[:500]
             await self._tg_send(f"🔧 {tool_name}: {truncated}")
 
