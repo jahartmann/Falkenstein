@@ -1174,7 +1174,7 @@ const CONFIG_GROUPS = {
   'Telegram': ['telegram_bot_token', 'telegram_admin_id'],
   'Obsidian': ['obsidian_vault_path'],
   'MCP Server': ['mcp_servers', 'mcp_apple_enabled', 'mcp_desktop_commander_enabled', 'mcp_obsidian_enabled', 'mcp_node_path', 'mcp_auto_restart'],
-  'API Schluessel': ['serper_api_key', 'brave_api_key'],
+  'API Schluessel / Search': ['serper_api_key', 'brave_api_key', 'premium_provider', 'premium_model'],
 };
 
 const CONFIG_LABELS = {
@@ -1191,8 +1191,10 @@ const CONFIG_LABELS = {
   obsidian_vault_path: 'Vault Pfad',
   ollama_num_ctx: 'Kontext-Fenster',
   ollama_keep_alive: 'Keep Alive',
-  serper_api_key: 'Serper API Key',
-  brave_api_key: 'Brave API Key',
+  serper_api_key: 'Serper API Key (CrewAI Web Search)',
+  brave_api_key: 'Brave Search API Key',
+  premium_provider: 'Premium LLM Provider (claude/gemini)',
+  premium_model: 'Premium Modell',
   mcp_servers: 'MCP Server (kommagetrennt)',
   mcp_apple_enabled: 'Apple MCP aktiv',
   mcp_desktop_commander_enabled: 'Desktop Commander aktiv',

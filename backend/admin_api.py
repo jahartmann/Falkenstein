@@ -289,11 +289,11 @@ async def get_config():
     if not _config_service:
         return {"config": []}
     config_list = _config_service.get_all()
-    # Merge Settings (.env) fields that might not be in ConfigService DB
+    # Merge Settings (.env) fields — always use .env values as source of truth
     from backend.config import settings as _settings
-    existing_keys = {c["key"] for c in config_list}
+    existing_map = {c["key"]: i for i, c in enumerate(config_list)}
     settings_fields = {
-        "mcp_servers": ("MCP Server", "mcp"),
+        "mcp_servers": ("MCP Server (kommagetrennt)", "mcp"),
         "mcp_apple_enabled": ("Apple MCP aktiv", "mcp"),
         "mcp_desktop_commander_enabled": ("Desktop Commander aktiv", "mcp"),
         "mcp_obsidian_enabled": ("Obsidian MCP aktiv", "mcp"),
@@ -302,11 +302,23 @@ async def get_config():
         "mcp_health_interval": ("Health-Check Intervall (s)", "mcp"),
         "ollama_num_ctx": ("Kontext-Fenster", "ollama"),
         "ollama_keep_alive": ("Keep Alive", "ollama"),
+        "serper_api_key": ("Serper API Key (CrewAI Web Search)", "api_keys"),
+        "brave_api_key": ("Brave Search API Key", "api_keys"),
+        "cli_provider": ("Premium LLM Provider", "premium"),
+        "cli_daily_token_budget": ("Tägliches Token-Budget", "premium"),
     }
     for key, (desc, cat) in settings_fields.items():
-        if key not in existing_keys and hasattr(_settings, key):
-            val = getattr(_settings, key)
-            config_list.append({"key": key, "value": str(val), "category": cat, "description": desc})
+        if not hasattr(_settings, key):
+            continue
+        val = str(getattr(_settings, key))
+        entry = {"key": key, "value": val, "category": cat, "description": desc}
+        if key in existing_map:
+            # Override DB value with .env value if DB value is empty
+            idx = existing_map[key]
+            if not config_list[idx].get("value"):
+                config_list[idx] = entry
+        else:
+            config_list.append(entry)
     return {"config": config_list}
 
 
