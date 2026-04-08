@@ -7,6 +7,8 @@ workspace/
 .superpowers/
 node_modules/
 venv/
+venv312/
+=0.*
 .claude/
 Büro/
 ~/
