@@ -178,6 +178,12 @@ export class OfficeScene extends Phaser.Scene {
     // WebSocket
     this.officeWS = new OfficeWS(this.agentManager, this.bubbleManager, this.hud);
     this.officeWS.connect();
+
+    // Daylight cycle overlay
+    if (typeof DaylightCycle !== 'undefined') {
+      this.daylight = new DaylightCycle(this);
+      window.daylightCycle = this.daylight;
+    }
   }
 
   update(time, delta) {
