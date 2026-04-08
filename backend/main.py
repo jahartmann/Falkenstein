@@ -349,13 +349,13 @@ async def office():
 
 @app.get("/")
 async def index():
-    # Prefer dashboard.html, fall back to index.html
+    # Prefer command-center.html, fall back to dashboard.html
+    cc_path = frontend_dir / "command-center.html"
+    if cc_path.exists():
+        return FileResponse(cc_path)
     dashboard_path = frontend_dir / "dashboard.html"
     if dashboard_path.exists():
         return FileResponse(dashboard_path)
-    index_path = frontend_dir / "index.html"
-    if index_path.exists():
-        return FileResponse(index_path)
     return {"status": "Falkenstein running"}
 
 
