@@ -39,8 +39,9 @@ def test_list_mcp_servers(client):
     resp = client.get("/api/admin/mcp/servers")
     assert resp.status_code == 200
     data = resp.json()
-    assert len(data) == 1
-    assert data[0]["id"] == "apple-mcp"
+    assert data["bridge_initialized"] is True
+    assert len(data["servers"]) == 1
+    assert data["servers"][0]["id"] == "apple-mcp"
 
 def test_get_mcp_server_tools(client):
     resp = client.get("/api/admin/mcp/servers/apple-mcp/tools")
