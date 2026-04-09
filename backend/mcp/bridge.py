@@ -6,6 +6,7 @@ Each server runs as a background asyncio task managing its own stdio_client
 """
 from __future__ import annotations
 import asyncio
+import concurrent.futures
 import logging
 import sys
 import time
@@ -42,6 +43,7 @@ class MCPBridge:
     def __init__(self, registry: MCPRegistry) -> None:
         self.registry = registry
         self._handles: dict[str, _ServerHandle] = {}
+        self._main_loop: asyncio.AbstractEventLoop | None = None
 
     @property
     def servers(self) -> list[ServerStatus]:
@@ -51,6 +53,7 @@ class MCPBridge:
 
     async def start(self, timeout: float = DEFAULT_START_TIMEOUT) -> None:
         """Start all enabled servers concurrently."""
+        self._main_loop = asyncio.get_running_loop()
         coros = []
         for s in self.registry.list_servers():
             if not s.config.enabled:
@@ -210,4 +213,24 @@ class MCPBridge:
             return ToolResult(success=False, output=f"Timeout after {timeout}s")
         except Exception as e:
             log.error("MCP tool call failed: %s/%s: %s", server_id, tool_name, e)
+            return ToolResult(success=False, output=f"Error: {e}")
+
+    def call_tool_threadsafe(
+        self, server_id: str, tool_name: str, args: dict,
+        timeout: float = TOOL_CALL_TIMEOUT,
+    ) -> ToolResult:
+        """Sync-facing tool call for CrewAI thread pool. Safe from any thread."""
+        if self._main_loop is None:
+            return ToolResult(success=False, output="Bridge not started")
+        if server_id not in self._handles:
+            return ToolResult(success=False, output=f"Server '{server_id}' not connected")
+        fut = asyncio.run_coroutine_threadsafe(
+            self.call_tool(server_id, tool_name, args, timeout),
+            self._main_loop,
+        )
+        try:
+            return fut.result(timeout=timeout + 5)
+        except concurrent.futures.TimeoutError:
+            return ToolResult(success=False, output=f"Timeout after {timeout}s")
+        except Exception as e:
             return ToolResult(success=False, output=f"Error: {e}")

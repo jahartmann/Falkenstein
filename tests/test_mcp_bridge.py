@@ -1,9 +1,10 @@
 """Tests for MCPBridge — server lifecycle and tool execution."""
 from __future__ import annotations
 import asyncio
+import concurrent.futures
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from backend.mcp.bridge import MCPBridge, DEFAULT_START_TIMEOUT
+from backend.mcp.bridge import MCPBridge, DEFAULT_START_TIMEOUT, ToolResult, _ServerHandle
 from backend.mcp.config import MCPServerConfig, ToolSchema
 from backend.mcp.registry import MCPRegistry
 
@@ -79,3 +80,45 @@ async def test_bridge_discover_tools_aggregates(bridge):
     assert len(tools) == 1
     assert tools[0].name == "test_tool"
     assert tools[0].server_id == "test-server"
+
+
+class _FakeSessionResult:
+    def __init__(self, text):
+        self.content = [type("B", (), {"text": text})()]
+        self.isError = False
+
+
+@pytest.mark.asyncio
+async def test_call_tool_threadsafe_from_other_thread():
+    """REGRESSION: CrewAI calls run in a thread pool; the bridge must
+    handle calls from threads other than the main loop. Previously this
+    created a fresh event loop and died with 'attached to different loop'."""
+    reg = MCPRegistry()
+    bridge = MCPBridge(reg)
+    bridge._main_loop = asyncio.get_running_loop()
+
+    fake_session = MagicMock()
+    fake_session.call_tool = AsyncMock(return_value=_FakeSessionResult("ok"))
+    handle = _ServerHandle(session=fake_session, task=None, start_time=0.0)
+    bridge._handles["fakesrv"] = handle
+
+    loop = asyncio.get_running_loop()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        result = await loop.run_in_executor(
+            pool,
+            lambda: bridge.call_tool_threadsafe("fakesrv", "ping", {"x": 1}),
+        )
+    assert isinstance(result, ToolResult)
+    assert result.success is True
+    assert result.output == "ok"
+    fake_session.call_tool.assert_awaited_once_with("ping", arguments={"x": 1})
+
+
+@pytest.mark.asyncio
+async def test_call_tool_threadsafe_unknown_server():
+    reg = MCPRegistry()
+    bridge = MCPBridge(reg)
+    bridge._main_loop = asyncio.get_running_loop()
+    result = bridge.call_tool_threadsafe("nope", "x", {})
+    assert result.success is False
+    assert "not connected" in result.output.lower()
