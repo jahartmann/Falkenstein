@@ -10,6 +10,7 @@ import concurrent.futures
 import logging
 import sys
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -33,6 +34,7 @@ class _ServerHandle:
     tools: list[ToolSchema] = field(default_factory=list)
     start_time: float = 0.0
     _shutdown: asyncio.Event = field(default_factory=asyncio.Event)
+    stderr: deque = field(default_factory=lambda: deque(maxlen=200))
 
 
 TOOL_CALL_TIMEOUT = 60.0
@@ -90,11 +92,40 @@ class MCPBridge:
                 args=cfg.args,
                 env=cfg.env or None,
             )
+
+            class _StderrCapture:
+                """File-like that appends lines to the handle's stderr deque."""
+                def __init__(self, buf, tee=sys.stderr):
+                    self.buf = buf
+                    self.tee = tee
+                    self._partial = ""
+                def write(self, data):
+                    try:
+                        if isinstance(data, bytes):
+                            data = data.decode("utf-8", errors="replace")
+                        self._partial += data
+                        while "\n" in self._partial:
+                            line, self._partial = self._partial.split("\n", 1)
+                            if line:
+                                self.buf.append(line)
+                        if self.tee:
+                            self.tee.write(data)
+                    except Exception:
+                        pass
+                def flush(self):
+                    if self.tee:
+                        try: self.tee.flush()
+                        except Exception: pass
+                def fileno(self):
+                    return self.tee.fileno() if hasattr(self.tee, "fileno") else -1
+
+            capture = _StderrCapture(handle.stderr)
+
             try:
                 # errlog param added in newer MCP SDK versions
                 import inspect
                 _sig = inspect.signature(stdio_client)
-                _kw = {"errlog": sys.stderr} if "errlog" in _sig.parameters else {}
+                _kw = {"errlog": capture} if "errlog" in _sig.parameters else {}
                 async with stdio_client(params, **_kw) as (read_stream, write_stream):
                     async with ClientSession(read_stream, write_stream) as session:
                         init_result = await session.initialize()
@@ -125,6 +156,7 @@ class MCPBridge:
             except Exception as e:
                 err_msg = f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
                 error_box.append(err_msg)
+                handle.stderr.append(f"[bridge] {err_msg}")
                 ready_event.set()  # unblock the waiter
 
         task = asyncio.create_task(_run(), name=f"mcp-server-{server_id}")
@@ -181,6 +213,11 @@ class MCPBridge:
     async def list_tools(self, server_id: str) -> list[ToolSchema]:
         h = self._handles.get(server_id)
         return h.tools if h else []
+
+    def get_stderr(self, server_id: str) -> list[str]:
+        """Return a snapshot of the last ~200 stderr lines for a server."""
+        h = self._handles.get(server_id)
+        return list(h.stderr) if h else []
 
     async def discover_tools(self) -> list[ToolSchema]:
         all_tools: list[ToolSchema] = []

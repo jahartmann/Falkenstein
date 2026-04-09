@@ -122,3 +122,30 @@ async def test_call_tool_threadsafe_unknown_server():
     result = bridge.call_tool_threadsafe("nope", "x", {})
     assert result.success is False
     assert "not connected" in result.output.lower()
+
+
+import collections
+
+@pytest.mark.asyncio
+async def test_stderr_ring_buffer_capture():
+    reg = MCPRegistry()
+    bridge = MCPBridge(reg)
+    handle = _ServerHandle(session=None, task=None, start_time=0.0)
+    assert isinstance(handle.stderr, collections.deque)
+    assert handle.stderr.maxlen == 200
+    for i in range(250):
+        handle.stderr.append(f"line {i}")
+    assert len(handle.stderr) == 200
+    assert handle.stderr[0] == "line 50"
+
+
+@pytest.mark.asyncio
+async def test_get_stderr_returns_snapshot():
+    reg = MCPRegistry()
+    bridge = MCPBridge(reg)
+    handle = _ServerHandle(session=None, task=None, start_time=0.0)
+    handle.stderr.extend(["a", "b", "c"])
+    bridge._handles["srv"] = handle
+    lines = bridge.get_stderr("srv")
+    assert lines == ["a", "b", "c"]
+    assert bridge.get_stderr("missing") == []
