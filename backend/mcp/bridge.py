@@ -7,17 +7,22 @@ Each server runs as a background asyncio task managing its own stdio_client
 from __future__ import annotations
 import asyncio
 import concurrent.futures
+import json
 import logging
 import sys
 import time
 from collections import deque
 from dataclasses import dataclass, field
+from pathlib import Path
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from backend.mcp.config import ServerStatus, ToolSchema
 from backend.mcp.registry import MCPRegistry
 
 log = logging.getLogger(__name__)
+
+EVENT_LOG_PATH = Path("data/mcp_events.log")
+EVENT_LOG_MAX_BYTES = 10 * 1024 * 1024
 
 
 @dataclass
@@ -46,6 +51,7 @@ class MCPBridge:
         self.registry = registry
         self._handles: dict[str, _ServerHandle] = {}
         self._main_loop: asyncio.AbstractEventLoop | None = None
+        self._health_task: asyncio.Task | None = None
 
     @property
     def servers(self) -> list[ServerStatus]:
@@ -64,9 +70,17 @@ class MCPBridge:
             coros.append(self._start_server(s.config.id, timeout))
         if coros:
             await asyncio.gather(*coros)
+        self._health_task = asyncio.create_task(self._health_loop(), name="mcp-health")
 
     async def stop(self) -> None:
         """Stop all running servers."""
+        if self._health_task:
+            self._health_task.cancel()
+            try:
+                await self._health_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._health_task = None
         for sid in list(self._handles):
             await self._stop_server(sid)
 
@@ -76,6 +90,7 @@ class MCPBridge:
         if status is None:
             return
         cfg = status.config
+        self._emit_event("start_attempt", server_id=server_id)
 
         # Event signals the background task to shut down
         ready_event = asyncio.Event()
@@ -150,6 +165,7 @@ class MCPBridge:
                         log.info("MCP server %s started with %d tools",
                                  server_id, len(tool_schemas))
                         ready_event.set()
+                        self._emit_event("start_ok", server_id=server_id, tools=len(tool_schemas))
 
                         # Keep alive until shutdown is requested
                         await handle._shutdown.wait()
@@ -157,6 +173,7 @@ class MCPBridge:
                 err_msg = f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
                 error_box.append(err_msg)
                 handle.stderr.append(f"[bridge] {err_msg}")
+                self._emit_event("start_failed", server_id=server_id, error=err_msg)
                 ready_event.set()  # unblock the waiter
 
         task = asyncio.create_task(_run(), name=f"mcp-server-{server_id}")
@@ -218,6 +235,39 @@ class MCPBridge:
         """Return a snapshot of the last ~200 stderr lines for a server."""
         h = self._handles.get(server_id)
         return list(h.stderr) if h else []
+
+    def _emit_event(self, event: str, **fields) -> None:
+        """Append a structured JSON line to the MCP event log."""
+        try:
+            EVENT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            if EVENT_LOG_PATH.exists() and EVENT_LOG_PATH.stat().st_size > EVENT_LOG_MAX_BYTES:
+                rotated = EVENT_LOG_PATH.with_suffix(".log.1")
+                if rotated.exists():
+                    rotated.unlink()
+                EVENT_LOG_PATH.rename(rotated)
+            payload = {"ts": time.time(), "event": event, **fields}
+            with EVENT_LOG_PATH.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(payload, default=str) + "\n")
+        except Exception as e:
+            log.debug("event log write failed: %s", e)
+
+    async def _health_tick(self) -> None:
+        """One pass of the health check — mark dead tasks as error."""
+        for sid, handle in list(self._handles.items()):
+            status = self.registry.get(sid)
+            if status and status.status == "running" and handle.task and handle.task.done():
+                self.registry.update_status(sid, status="error", last_error="task exited")
+                self._emit_event("subprocess_exited", server_id=sid)
+
+    async def _health_loop(self, interval: float = 30.0) -> None:
+        while True:
+            try:
+                await asyncio.sleep(interval)
+                await self._health_tick()
+            except asyncio.CancelledError:
+                return
+            except Exception as e:
+                log.warning("health tick failed: %s", e)
 
     async def discover_tools(self) -> list[ToolSchema]:
         all_tools: list[ToolSchema] = []

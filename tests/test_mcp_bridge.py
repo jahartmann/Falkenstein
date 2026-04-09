@@ -149,3 +149,33 @@ async def test_get_stderr_returns_snapshot():
     lines = bridge.get_stderr("srv")
     assert lines == ["a", "b", "c"]
     assert bridge.get_stderr("missing") == []
+
+
+@pytest.mark.asyncio
+async def test_bridge_emits_event_log(tmp_path, monkeypatch):
+    from backend.mcp import bridge as bmod
+    monkeypatch.setattr(bmod, "EVENT_LOG_PATH", tmp_path / "mcp_events.log")
+    reg = MCPRegistry()
+    b = MCPBridge(reg)
+    b._emit_event("start_attempt", server_id="apple-mcp")
+    log_text = (tmp_path / "mcp_events.log").read_text()
+    assert '"event": "start_attempt"' in log_text
+    assert '"server_id": "apple-mcp"' in log_text
+
+
+@pytest.mark.asyncio
+async def test_bridge_health_check_marks_dead_task():
+    reg = MCPRegistry()
+    from backend.mcp.config import MCPServerConfig
+    reg.register(MCPServerConfig(id="x", name="X", command="nope", args=[]))
+    b = MCPBridge(reg)
+    reg.update_status("x", status="running")
+
+    async def _done():
+        return None
+    task = asyncio.create_task(_done())
+    await task
+    handle = _ServerHandle(session=MagicMock(), task=task, start_time=0.0)
+    b._handles["x"] = handle
+    await b._health_tick()
+    assert reg.get("x").status == "error"
