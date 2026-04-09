@@ -34,6 +34,10 @@
           <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h0M10 10h0M14 10h0M6 14h12"/></svg>
           <span>MCP</span>
         </button>
+        <button class="sidebar-btn" data-section="mcp-store" title="MCP Store">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/><circle cx="12" cy="7" r="1" fill="currentColor"/></svg>
+          <span>MCP Store</span>
+        </button>
         <button class="sidebar-btn" data-section="schedules" title="Schedules">
           <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
           <span>Schedules</span>
@@ -135,6 +139,43 @@
       <!-- ========== MCP ========== -->
       <section class="section" id="section-mcp">
         <div class="card-grid" id="mcp-grid"><span class="text-muted">Lade...</span></div>
+      </section>
+
+      <!-- ========== MCP Store ========== -->
+      <section class="section" id="section-mcp-store">
+        <header class="mcp-store-header">
+          <h2>MCP Store</h2>
+          <div class="mcp-store-controls">
+            <input type="search" id="mcp-search" placeholder="Search servers..." />
+            <select id="mcp-filter-category">
+              <option value="">All categories</option>
+              <option value="productivity">Productivity</option>
+              <option value="knowledge">Knowledge</option>
+              <option value="system">System</option>
+              <option value="research">Research</option>
+              <option value="development">Development</option>
+              <option value="data">Data</option>
+              <option value="reasoning">Reasoning</option>
+              <option value="utility">Utility</option>
+            </select>
+            <select id="mcp-filter-risk">
+              <option value="">Any risk</option>
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+            </select>
+          </div>
+        </header>
+
+        <div id="mcp-installed-zone" class="mcp-zone">
+          <h3>Installed</h3>
+          <div id="mcp-installed-grid" class="mcp-grid"></div>
+        </div>
+
+        <div id="mcp-available-zone" class="mcp-zone">
+          <h3>Available</h3>
+          <div id="mcp-available-grid" class="mcp-grid"></div>
+        </div>
       </section>
 
       <!-- ========== Schedules ========== -->
@@ -285,6 +326,18 @@
     <div class="modal">
       <input type="text" id="cmd-search" placeholder="Befehl suchen..." oninput="filterCommands()">
       <div class="cmd-list" id="cmd-list"></div>
+    </div>
+  </div>
+
+  <!-- Modal: MCP Install -->
+  <div class="modal-overlay" id="mcp-install-modal">
+    <div class="modal">
+      <h3 id="mcp-modal-title">Install server</h3>
+      <form id="mcp-install-form"></form>
+      <div class="modal-actions">
+        <button class="btn" id="mcp-install-cancel" type="button">Cancel</button>
+        <button class="btn btn-primary" id="mcp-install-confirm" type="button">Install</button>
+      </div>
     </div>
   </div>
 
