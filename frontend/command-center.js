@@ -1475,3 +1475,309 @@ document.addEventListener('keydown', (e) => {
 updateThemeIcon();
 loadDashboard();
 connectWS();
+
+// ── MCP Store ─────────────────────────────────────────────────────
+
+const MCPStore = (() => {
+  const state = {
+    catalog: [],
+    servers: [],
+    search: "",
+    category: "",
+    risk: "",
+  };
+  let _initialized = false;
+
+  async function fetchAll() {
+    try {
+      const [catRes, srvRes] = await Promise.all([
+        fetch("/api/mcp/catalog").then(r => r.json()),
+        fetch("/api/mcp/servers").then(r => r.json()),
+      ]);
+      state.catalog = catRes || [];
+      state.servers = srvRes || [];
+      render();
+    } catch (e) {
+      console.error("MCPStore fetchAll failed:", e);
+    }
+  }
+
+  function matchFilters(entry) {
+    if (state.search) {
+      const s = state.search.toLowerCase();
+      if (!(entry.name.toLowerCase().includes(s) ||
+            entry.description.toLowerCase().includes(s))) return false;
+    }
+    if (state.category && entry.category !== state.category) return false;
+    if (state.risk && entry.risk_level !== state.risk) return false;
+    return true;
+  }
+
+  function platformOk(entry) {
+    if (!entry.platform || entry.platform.length === 0) return true;
+    const ua = navigator.userAgent.toLowerCase();
+    if (entry.platform.includes("darwin") && ua.includes("mac")) return true;
+    if (entry.platform.includes("linux") && ua.includes("linux")) return true;
+    if (entry.platform.includes("win32") && ua.includes("win")) return true;
+    return false;
+  }
+
+  function render() {
+    const installed = state.catalog.filter(e => e.installed && matchFilters(e));
+    const available = state.catalog.filter(e => !e.installed && matchFilters(e));
+    const iGrid = document.getElementById("mcp-installed-grid");
+    const aGrid = document.getElementById("mcp-available-grid");
+    const iZone = document.getElementById("mcp-installed-zone");
+    if (!iGrid || !aGrid || !iZone) return;
+    iGrid.innerHTML = installed.map(renderInstalledCard).join("") ||
+      '<p class="mcp-empty">No installed servers yet.</p>';
+    aGrid.innerHTML = available.map(renderAvailableCard).join("");
+    iZone.style.display = installed.length > 0 ? "block" : "none";
+    attachHandlers();
+  }
+
+  function renderInstalledCard(e) {
+    const statusClass = `mcp-badge-status-${e.status || "stopped"}`;
+    const riskClass = `mcp-badge-risk-${e.risk_level}`;
+    return `
+      <div class="mcp-card" data-id="${e.id}">
+        <div class="mcp-card-header">
+          <span class="mcp-card-title">${escMcp(e.name)}</span>
+          <div class="mcp-badges">
+            <span class="mcp-badge ${statusClass}">${e.status || "stopped"}</span>
+            <span class="mcp-badge ${riskClass}">${e.risk_level}</span>
+          </div>
+        </div>
+        <div class="mcp-card-desc">${escMcp(e.description)}</div>
+        <label style="font-size:0.8rem;display:flex;gap:0.4rem;align-items:center;">
+          <input type="checkbox" class="mcp-toggle-enabled" ${e.enabled ? "checked" : ""} />
+          Enabled
+        </label>
+        <div class="mcp-card-actions">
+          <button class="mcp-btn-restart">Restart</button>
+          <button class="mcp-btn-logs">Logs</button>
+          <button class="mcp-btn-tools">Tools</button>
+          <button class="mcp-btn-uninstall">Uninstall</button>
+        </div>
+        <div class="mcp-card-expander" data-slot="expand" hidden></div>
+      </div>
+    `;
+  }
+
+  function renderAvailableCard(e) {
+    const riskClass = `mcp-badge-risk-${e.risk_level}`;
+    const unavailable = !platformOk(e);
+    return `
+      <div class="mcp-card ${unavailable ? "mcp-card-unavailable" : ""}" data-id="${e.id}">
+        <div class="mcp-card-header">
+          <span class="mcp-card-title">${escMcp(e.name)}</span>
+          <div class="mcp-badges">
+            <span class="mcp-badge ${riskClass}">${e.risk_level}</span>
+            <span class="mcp-badge">${e.category}</span>
+          </div>
+        </div>
+        <div class="mcp-card-desc">${escMcp(e.description)}</div>
+        ${unavailable ? '<div class="mcp-card-error">Not available on this platform</div>' : ""}
+        <div class="mcp-card-actions">
+          <button class="mcp-btn-install" ${unavailable ? "disabled" : ""}>Install</button>
+        </div>
+      </div>
+    `;
+  }
+
+  function escMcp(s) {
+    return (s || "").replace(/[&<>"']/g, c =>
+      ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+  }
+
+  function attachHandlers() {
+    document.querySelectorAll(".mcp-btn-install").forEach(btn => {
+      btn.onclick = () => {
+        const id = btn.closest(".mcp-card").dataset.id;
+        openInstallModal(id);
+      };
+    });
+    document.querySelectorAll(".mcp-btn-uninstall").forEach(btn => {
+      btn.onclick = async () => {
+        const id = btn.closest(".mcp-card").dataset.id;
+        if (!confirm(`Uninstall ${id}?`)) return;
+        await fetch(`/api/mcp/servers/${id}/uninstall`, {method: "POST"});
+        fetchAll();
+      };
+    });
+    document.querySelectorAll(".mcp-btn-restart").forEach(btn => {
+      btn.onclick = async () => {
+        const id = btn.closest(".mcp-card").dataset.id;
+        await fetch(`/api/mcp/servers/${id}/restart`, {method: "POST"});
+        fetchAll();
+      };
+    });
+    document.querySelectorAll(".mcp-toggle-enabled").forEach(cb => {
+      cb.onchange = async () => {
+        const id = cb.closest(".mcp-card").dataset.id;
+        const action = cb.checked ? "enable" : "disable";
+        await fetch(`/api/mcp/servers/${id}/${action}`, {method: "POST"});
+        fetchAll();
+      };
+    });
+    document.querySelectorAll(".mcp-btn-logs").forEach(btn => {
+      btn.onclick = async () => {
+        const card = btn.closest(".mcp-card");
+        const slot = card.querySelector('[data-slot="expand"]');
+        if (!slot.hidden) { slot.hidden = true; return; }
+        const id = card.dataset.id;
+        const res = await fetch(`/api/mcp/servers/${id}/logs`).then(r => r.json());
+        const lines = (res.stderr || []).join("\n") || "(no output)";
+        slot.innerHTML = `<div class="mcp-logs-box">${escMcp(lines)}</div>`;
+        slot.hidden = false;
+      };
+    });
+    document.querySelectorAll(".mcp-btn-tools").forEach(btn => {
+      btn.onclick = async () => {
+        const card = btn.closest(".mcp-card");
+        const slot = card.querySelector('[data-slot="expand"]');
+        if (!slot.hidden) { slot.hidden = true; return; }
+        const id = card.dataset.id;
+        const tools = await fetch(`/api/mcp/servers/${id}/tools`).then(r => r.json());
+        if (!Array.isArray(tools) || tools.length === 0) {
+          slot.innerHTML = '<p class="mcp-empty">No tools (server not running?)</p>';
+        } else {
+          slot.innerHTML = `<div class="mcp-tools-list">` + tools.map(t => `
+            <div class="mcp-tool-row">
+              <span>${escMcp(t.name)}</span>
+              <select class="mcp-permission-select" data-server="${id}" data-tool="${escMcp(t.name)}">
+                <option value="__default__" ${t.source !== "db" ? "selected" : ""}>default (${t.source})</option>
+                <option value="allow" ${t.source === "db" && t.permission === "allow" ? "selected" : ""}>allow</option>
+                <option value="ask" ${t.source === "db" && t.permission === "ask" ? "selected" : ""}>ask</option>
+                <option value="deny" ${t.source === "db" && t.permission === "deny" ? "selected" : ""}>deny</option>
+              </select>
+            </div>
+          `).join("") + `</div>`;
+          slot.querySelectorAll(".mcp-permission-select").forEach(sel => {
+            sel.onchange = async () => {
+              const sid = sel.dataset.server;
+              const tname = sel.dataset.tool;
+              if (sel.value === "__default__") {
+                await fetch(`/api/mcp/permissions/${sid}/${encodeURIComponent(tname)}`, {method: "DELETE"});
+              } else {
+                await fetch(`/api/mcp/permissions/${sid}/${encodeURIComponent(tname)}`, {
+                  method: "PUT",
+                  headers: {"Content-Type": "application/json"},
+                  body: JSON.stringify({decision: sel.value}),
+                });
+              }
+            };
+          });
+        }
+        slot.hidden = false;
+      };
+    });
+  }
+
+  function openInstallModal(serverId) {
+    const entry = state.catalog.find(e => e.id === serverId);
+    if (!entry) return;
+    document.getElementById("mcp-modal-title").textContent = `Install ${entry.name}`;
+    const form = document.getElementById("mcp-install-form");
+    form.innerHTML = (entry.requires_config || []).map(k =>
+      `<label>${escMcp(k)}<input type="text" name="${escMcp(k)}" /></label>`
+    ).join("") || "<p>No configuration required.</p>";
+    openModal();
+    document.getElementById("mcp-install-confirm").onclick = async () => {
+      const cfg = {};
+      (entry.requires_config || []).forEach(k => {
+        const input = form.querySelector(`[name="${k}"]`);
+        if (input) cfg[k] = input.value;
+      });
+      const r = await fetch(`/api/mcp/servers/${serverId}/install`, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({config: cfg}),
+      }).then(r => r.json());
+      if (r.status === "ok") {
+        closeModal();
+        fetchAll();
+      } else {
+        alert(`Install failed: ${r.error || "unknown"}\n${r.stderr || ""}`);
+      }
+    };
+    document.getElementById("mcp-install-cancel").onclick = closeModal;
+  }
+
+  function openModal() {
+    const m = document.getElementById("mcp-install-modal");
+    // Supports both .open class (existing pattern) and [hidden] fallback
+    m.classList.add("open");
+    m.hidden = false;
+  }
+
+  function closeModal() {
+    const m = document.getElementById("mcp-install-modal");
+    m.classList.remove("open");
+    m.hidden = true;
+  }
+
+  function init() {
+    if (_initialized) return;
+    _initialized = true;
+    const searchEl = document.getElementById("mcp-search");
+    const catEl = document.getElementById("mcp-filter-category");
+    const riskEl = document.getElementById("mcp-filter-risk");
+    if (searchEl) searchEl.oninput = (e) => { state.search = e.target.value; render(); };
+    if (catEl) catEl.onchange = (e) => { state.category = e.target.value; render(); };
+    if (riskEl) riskEl.onchange = (e) => { state.risk = e.target.value; render(); };
+    fetchAll();
+  }
+
+  return { init, fetchAll };
+})();
+
+// Hook sidebar activation: when the user clicks the mcp-store sidebar button,
+// initialize the store (once) and refetch on subsequent activations.
+(function hookMCPStoreActivation() {
+  document.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-section="mcp-store"]');
+    if (btn) {
+      // Slight delay so the existing switcher has time to activate the section
+      setTimeout(() => MCPStore.init(), 10);
+    }
+  });
+})();
+
+// Listen for backend state-change broadcasts over the existing WS connection
+// (assumes a global `ws` or a dispatcher pattern; we hook into whatever exists)
+(function hookWSEvents() {
+  // Try to piggyback on the global ws or addEventListener pattern.
+  // If the app has a custom dispatcher, we add a listener on window for a custom event.
+  const handler = (msg) => {
+    if (!msg) return;
+    if (msg.type === 'mcp_state_changed') {
+      MCPStore.fetchAll();
+    } else if (msg.type === 'approval_pending') {
+      showMcpToast(`Approval: ${msg.server_id}::${msg.tool_name} — check Telegram`);
+    }
+  };
+  window.addEventListener('ws:message', (e) => handler(e.detail));
+  // Also try to patch the global ws if one exists
+  const tryPatch = () => {
+    if (window.ws && !window.ws._mcpHooked) {
+      window.ws._mcpHooked = true;
+      const origOnMessage = window.ws.onmessage;
+      window.ws.onmessage = (ev) => {
+        try { handler(JSON.parse(ev.data)); } catch {}
+        if (origOnMessage) origOnMessage(ev);
+      };
+    }
+  };
+  tryPatch();
+  setTimeout(tryPatch, 500);
+  setTimeout(tryPatch, 2000);
+})();
+
+function showMcpToast(text) {
+  const el = document.createElement('div');
+  el.textContent = text;
+  el.style.cssText = 'position:fixed;bottom:20px;right:20px;background:#2a2a30;color:#eee;padding:0.75rem 1rem;border-radius:8px;z-index:200;box-shadow:0 4px 12px rgba(0,0,0,0.4);';
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 5000);
+}
