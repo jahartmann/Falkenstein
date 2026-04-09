@@ -5,6 +5,7 @@ data/
 workspace/
 .DS_Store
 .superpowers/
+.worktrees/
 node_modules/
 venv/
 venv312/
