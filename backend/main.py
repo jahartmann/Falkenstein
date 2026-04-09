@@ -22,7 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.security.auth import BearerAuthMiddleware
 from backend.security.telegram_allowlist import TelegramAllowlist
 from backend.config_service import ConfigService
-from backend.admin_api import router as admin_router
+from backend.admin_api import router as admin_router, mcp_router
 from backend.workspace_api import router as workspace_router
 from backend import admin_api
 from backend.database import Database
@@ -349,6 +349,7 @@ app = FastAPI(title="Falkenstein", lifespan=lifespan)
 app.add_middleware(BearerAuthMiddleware, api_token=API_TOKEN)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 app.include_router(admin_router)
+app.include_router(mcp_router)
 app.include_router(workspace_router)
 
 frontend_dir = Path(__file__).parent.parent / "frontend"
