@@ -143,3 +143,46 @@ def test_api_permissions_empty(admin_app_client):
     r = admin_app_client.get("/api/mcp/permissions")
     assert r.status_code == 200
     assert isinstance(r.json(), list)
+
+
+# ── Task 15: Mutating endpoints ───────────────────────────────────────
+
+def test_api_install_triggers_installer(admin_app_client, tmp_path, monkeypatch):
+    from backend.mcp import installer as inst
+    calls = []
+    async def fake_install(sid, pkg, bin_name):
+        calls.append((sid, pkg, bin_name))
+        from backend.mcp.installer import InstallResult
+        return InstallResult(success=True, binary_path=tmp_path / "bin",
+                             error=None, stderr="")
+    monkeypatch.setattr(inst, "install", fake_install)
+    r = admin_app_client.post("/api/mcp/servers/apple-mcp/install",
+                              json={"config": {}})
+    assert r.status_code == 200
+    assert r.json()["status"] == "ok"
+    assert calls == [("apple-mcp", "apple-mcp", "apple-mcp")]
+
+
+def test_api_enable_sets_flag(admin_app_client):
+    r = admin_app_client.post("/api/mcp/servers/apple-mcp/enable")
+    assert r.status_code == 200
+
+
+def test_api_disable_clears_flag(admin_app_client):
+    admin_app_client.post("/api/mcp/servers/apple-mcp/enable")
+    r = admin_app_client.post("/api/mcp/servers/apple-mcp/disable")
+    assert r.status_code == 200
+
+
+def test_api_permission_put_and_delete(admin_app_client):
+    r = admin_app_client.put("/api/mcp/permissions/apple-mcp/some_tool",
+                             json={"decision": "deny"})
+    assert r.status_code == 200
+    r2 = admin_app_client.get("/api/mcp/permissions")
+    rows = r2.json()
+    assert any(x["server_id"] == "apple-mcp" and x["tool_name"] == "some_tool"
+               and x["decision"] == "deny" for x in rows)
+    r3 = admin_app_client.delete("/api/mcp/permissions/apple-mcp/some_tool")
+    assert r3.status_code == 200
+    r4 = admin_app_client.get("/api/mcp/permissions")
+    assert not any(x["tool_name"] == "some_tool" for x in r4.json())

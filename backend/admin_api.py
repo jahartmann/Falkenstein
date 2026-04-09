@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from backend.models import TaskStatus
 from backend.mcp.catalog import CATALOG
 from backend.mcp.permissions import PermissionResolver, classify_heuristic
+from backend.mcp import installer as _installer
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 mcp_router = APIRouter(prefix="/api/mcp", tags=["mcp"])
@@ -100,6 +101,26 @@ class ConfigBatchUpdate(BaseModel):
 
 class LLMRoutingUpdate(BaseModel):
     routing: dict[str, str]  # e.g. {"classify": "local", "action": "claude", ...}
+
+
+class MCPInstallBody(BaseModel):
+    config: dict = {}
+
+
+class MCPPermissionBody(BaseModel):
+    decision: str
+
+
+class MCPResolveBody(BaseModel):
+    decision: str  # allow | deny | allow_once
+
+
+async def _broadcast_mcp_state_changed():
+    try:
+        from backend.main import ws_mgr  # late import to avoid cycle
+        await ws_mgr.broadcast({"type": "mcp_state_changed"})
+    except Exception:
+        pass
 
 
 # ── Dashboard ────────────────────────────────────────────────────────
@@ -1252,3 +1273,92 @@ async def api_mcp_approvals_history(limit: int = 50):
                 "requested_at": r[5], "decided_at": r[6],
             })
     return rows
+
+
+# ── MCP Mutating endpoints ────────────────────────────────────────────
+
+@mcp_router.post("/servers/{server_id}/install")
+async def api_mcp_install(server_id: str, body: MCPInstallBody):
+    entry = CATALOG.get(server_id)
+    if entry is None:
+        return {"status": "error", "error": "not in catalog"}
+    result = await _installer.install(server_id, entry["package"], entry["bin"])
+    if not result.success:
+        return {"status": "error", "error": result.error, "stderr": result.stderr}
+    reg = _mcp_bridge.registry
+    await reg.set_installed(_db, server_id, True, config=body.config)
+    await _broadcast_mcp_state_changed()
+    return {"status": "ok"}
+
+
+@mcp_router.post("/servers/{server_id}/uninstall")
+async def api_mcp_uninstall(server_id: str):
+    reg = _mcp_bridge.registry
+    # Stop first if running
+    if hasattr(_mcp_bridge, "_stop_server") and server_id in getattr(_mcp_bridge, "_handles", {}):
+        await _mcp_bridge._stop_server(server_id)
+    ok = await _installer.uninstall(server_id)
+    await reg.set_installed(_db, server_id, False)
+    await reg.set_enabled(_db, server_id, False)
+    await _broadcast_mcp_state_changed()
+    return {"status": "ok" if ok else "error"}
+
+
+@mcp_router.post("/servers/{server_id}/enable")
+async def api_mcp_enable(server_id: str):
+    reg = _mcp_bridge.registry
+    await reg.set_enabled(_db, server_id, True)
+    if hasattr(_mcp_bridge, "_start_server") and server_id not in getattr(_mcp_bridge, "_handles", {}):
+        try:
+            await _mcp_bridge._start_server(server_id, 45.0)
+        except Exception as e:
+            return {"status": "error", "error": str(e)}
+    await _broadcast_mcp_state_changed()
+    return {"status": "ok"}
+
+
+@mcp_router.post("/servers/{server_id}/disable")
+async def api_mcp_disable(server_id: str):
+    reg = _mcp_bridge.registry
+    await reg.set_enabled(_db, server_id, False)
+    if hasattr(_mcp_bridge, "_stop_server") and server_id in getattr(_mcp_bridge, "_handles", {}):
+        await _mcp_bridge._stop_server(server_id)
+    await _broadcast_mcp_state_changed()
+    return {"status": "ok"}
+
+
+@mcp_router.post("/servers/{server_id}/restart")
+async def api_mcp_restart(server_id: str):
+    if hasattr(_mcp_bridge, "restart_server"):
+        await _mcp_bridge.restart_server(server_id)
+    await _broadcast_mcp_state_changed()
+    return {"status": "ok"}
+
+
+@mcp_router.put("/permissions/{server_id}/{tool_name}")
+async def api_mcp_permission_put(server_id: str, tool_name: str, body: MCPPermissionBody):
+    if _permission_resolver is None:
+        return {"status": "error", "error": "resolver not wired"}
+    try:
+        await _permission_resolver.set_override(server_id, tool_name, body.decision)
+    except ValueError as e:
+        return {"status": "error", "error": str(e)}
+    await _broadcast_mcp_state_changed()
+    return {"status": "ok"}
+
+
+@mcp_router.delete("/permissions/{server_id}/{tool_name}")
+async def api_mcp_permission_delete(server_id: str, tool_name: str):
+    if _permission_resolver is None:
+        return {"status": "error", "error": "resolver not wired"}
+    await _permission_resolver.clear_override(server_id, tool_name)
+    await _broadcast_mcp_state_changed()
+    return {"status": "ok"}
+
+
+@mcp_router.post("/approvals/{approval_id}/resolve")
+async def api_mcp_approval_resolve(approval_id: str, body: MCPResolveBody):
+    if _approval_store is None:
+        return {"status": "error", "error": "no approval store"}
+    ok = _approval_store.resolve(approval_id, body.decision, "ws")
+    return {"status": "ok" if ok else "already_resolved"}
