@@ -206,3 +206,67 @@ async def test_bridge_health_check_marks_dead_task():
     b._handles["x"] = handle
     await b._health_tick()
     assert reg.get("x").status == "error"
+
+
+@pytest.mark.asyncio
+async def test_call_tool_denied_by_permission(tmp_path):
+    from backend.mcp.registry import MCPRegistry
+    from backend.database import Database
+    from backend.mcp.permissions import PermissionResolver
+    db = Database(tmp_path / "t.db"); await db.init()
+    reg = MCPRegistry()
+    await reg.load_from_db(db)
+    resolver = PermissionResolver(db)
+    await resolver.set_override("apple-mcp", "delete_all", "deny")
+    bridge = MCPBridge(reg)
+    bridge.attach_policy(resolver=resolver, approval_store=None)
+    bridge._main_loop = asyncio.get_running_loop()
+    bridge._handles["apple-mcp"] = _ServerHandle(
+        session=MagicMock(), task=None, start_time=0.0,
+    )
+    result = await bridge.call_tool("apple-mcp", "delete_all", {})
+    assert result.success is False
+    assert "denied" in result.output.lower()
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_call_tool_asks_then_allows(tmp_path):
+    from backend.mcp.registry import MCPRegistry
+    from backend.database import Database
+    from backend.mcp.permissions import PermissionResolver
+    from backend.mcp.approvals import ApprovalStore
+
+    db = Database(tmp_path / "t.db"); await db.init()
+    reg = MCPRegistry()
+    await reg.load_from_db(db)
+    resolver = PermissionResolver(db)
+
+    tg = MagicMock()
+    tg.enabled = True
+    tg.send_approval_request = AsyncMock()
+    ws = MagicMock()
+    ws.broadcast = AsyncMock()
+    store = ApprovalStore(tg, ws, db, timeout_seconds=5)
+
+    bridge = MCPBridge(reg)
+    bridge.attach_policy(resolver=resolver, approval_store=store)
+    bridge._main_loop = asyncio.get_running_loop()
+
+    fake_session = MagicMock()
+    fake_session.call_tool = AsyncMock(return_value=_FakeSessionResult("done"))
+    bridge._handles["apple-mcp"] = _ServerHandle(
+        session=fake_session, task=None, start_time=0.0,
+    )
+
+    async def approver():
+        await asyncio.sleep(0.05)
+        pending = store.list_pending()
+        assert len(pending) == 1
+        store.resolve(pending[0].id, "allow", "telegram")
+    asyncio.create_task(approver())
+
+    result = await bridge.call_tool("apple-mcp", "send_message", {"to": "x"})
+    assert result.success is True
+    assert result.output == "done"
+    await db.close()

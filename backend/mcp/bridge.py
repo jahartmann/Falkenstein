@@ -52,6 +52,13 @@ class MCPBridge:
         self._handles: dict[str, _ServerHandle] = {}
         self._main_loop: asyncio.AbstractEventLoop | None = None
         self._health_task: asyncio.Task | None = None
+        self._resolver = None     # PermissionResolver
+        self._approvals = None    # ApprovalStore
+
+    def attach_policy(self, resolver, approval_store) -> None:
+        """Wire the permission resolver and approval store into call_tool."""
+        self._resolver = resolver
+        self._approvals = approval_store
 
     @property
     def servers(self) -> list[ServerStatus]:
@@ -328,6 +335,25 @@ class MCPBridge:
         handle = self._handles.get(server_id)
         if handle is None or handle.session is None:
             return ToolResult(success=False, output=f"Server '{server_id}' not connected")
+
+        # Policy check (if attached)
+        if self._resolver is not None:
+            decision = await self._resolver.check(server_id, tool_name)
+            if decision == "deny":
+                self._emit_event("tool_denied", server_id=server_id, tool_name=tool_name)
+                return ToolResult(success=False, output="denied by policy")
+            if decision == "ask":
+                if self._approvals is None:
+                    return ToolResult(success=False,
+                                      output="approval required but no approval channel")
+                self._emit_event("approval_requested", server_id=server_id, tool_name=tool_name)
+                approval_result = await self._approvals.request(server_id, tool_name, args)
+                if approval_result != "allow":
+                    self._emit_event("approval_not_granted",
+                                     server_id=server_id, tool_name=tool_name,
+                                     result=approval_result)
+                    return ToolResult(success=False, output=f"approval {approval_result}")
+
         try:
             result = await asyncio.wait_for(
                 handle.session.call_tool(tool_name, arguments=args),
@@ -340,12 +366,16 @@ class MCPBridge:
                 else:
                     output_parts.append(str(block))
             output = "\n".join(output_parts)
+            self._emit_event("tool_call_ok", server_id=server_id, tool_name=tool_name)
             return ToolResult(success=not result.isError, output=output)
         except asyncio.TimeoutError:
             log.error("MCP tool call timed out after %.0fs: %s/%s", timeout, server_id, tool_name)
+            self._emit_event("tool_call_timeout", server_id=server_id, tool_name=tool_name)
             return ToolResult(success=False, output=f"Timeout after {timeout}s")
         except Exception as e:
             log.error("MCP tool call failed: %s/%s: %s", server_id, tool_name, e)
+            self._emit_event("tool_call_error", server_id=server_id,
+                             tool_name=tool_name, error=str(e))
             return ToolResult(success=False, output=f"Error: {e}")
 
     def call_tool_threadsafe(
