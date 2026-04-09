@@ -81,6 +81,8 @@ CONFIG_DEFAULTS: list[dict] = [
     {"key": "soul_prompt", "value": "", "category": "personality", "description": "Falki system prompt / personality"},
     {"key": "obsidian_enabled", "value": "true", "category": "general", "description": "Write results to Obsidian"},
     {"key": "obsidian_auto_knowledge", "value": "true", "category": "general", "description": "Auto-write content results to Obsidian"},
+    # MCP
+    {"key": "mcp_approval_timeout_seconds", "value": "600", "category": "mcp", "description": "Seconds to wait for user approval of sensitive MCP tool calls before auto-deny"},
 ]
 
 

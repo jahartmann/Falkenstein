@@ -114,3 +114,16 @@ async def test_set_many(cfg: ConfigService):
     await cfg.set_many({"ollama_host": "http://a:1", "ollama_model": "tiny"})
     assert cfg.get("ollama_host") == "http://a:1"
     assert cfg.get("ollama_model") == "tiny"
+
+
+@pytest.mark.asyncio
+async def test_approval_timeout_default(cfg: ConfigService):
+    """mcp_approval_timeout_seconds default is 600."""
+    assert cfg.get_int("mcp_approval_timeout_seconds", 0) == 600
+
+
+@pytest.mark.asyncio
+async def test_approval_timeout_override(cfg: ConfigService):
+    """mcp_approval_timeout_seconds can be overridden."""
+    await cfg.set("mcp_approval_timeout_seconds", "300")
+    assert cfg.get_int("mcp_approval_timeout_seconds", 0) == 300
