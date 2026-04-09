@@ -26,6 +26,7 @@ class TelegramBot:
         self._offset: int = 0
         self._handlers: list = []
         self._started: bool = False  # Skip old messages on first poll
+        self.approval_store = None  # Set by main.py to ApprovalStore instance
 
     @property
     def enabled(self) -> bool:
@@ -97,6 +98,63 @@ class TelegramBot:
         except Exception:
             return False
 
+    async def _api_post(self, method: str, payload: dict) -> dict:
+        """Low-level POST to a Telegram Bot API method. Returns parsed JSON."""
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(f"{self.base_url}/{method}", json=payload)
+            return resp.json()
+
+    async def send_approval_request(self, approval) -> None:
+        """Send a tool-call approval prompt with inline Allow/Deny/Once buttons."""
+        args_preview = str(approval.args)[:200]
+        text = (
+            f"🔒 Approval required\n"
+            f"Crew wants to call:\n"
+            f"    {approval.server_id}::{approval.tool_name}\n"
+            f"Args: {args_preview}"
+        )
+        keyboard = {
+            "inline_keyboard": [[
+                {"text": "✅ Allow", "callback_data": f"approval:{approval.id}:allow"},
+                {"text": "❌ Deny", "callback_data": f"approval:{approval.id}:deny"},
+                {"text": "⏭️ Allow once", "callback_data": f"approval:{approval.id}:allow_once"},
+            ]]
+        }
+        payload = {
+            "chat_id": self.chat_id,
+            "text": text,
+            "reply_markup": keyboard,
+        }
+        await self._api_post("sendMessage", payload)
+
+    async def handle_callback_query(self, cq: dict) -> None:
+        """Parse Telegram callback_query and forward approval decisions to ApprovalStore."""
+        data = cq.get("data", "")
+        if not data.startswith("approval:"):
+            return
+        parts = data.split(":")
+        if len(parts) != 3:
+            return
+        _, approval_id, decision = parts
+        if self.approval_store is None:
+            return
+        self.approval_store.resolve(approval_id, decision, "telegram")
+        # Acknowledge the callback and edit the original message
+        try:
+            await self._api_post("answerCallbackQuery", {
+                "callback_query_id": cq.get("id"),
+                "text": f"Decision: {decision}",
+            })
+            msg = cq.get("message", {})
+            if msg.get("chat", {}).get("id") and msg.get("message_id"):
+                await self._api_post("editMessageText", {
+                    "chat_id": msg["chat"]["id"],
+                    "message_id": msg["message_id"],
+                    "text": f"🔒 Approval resolved: {decision}",
+                })
+        except Exception:
+            pass
+
     async def download_file(self, file_id: str, suffix: str = "") -> Path | None:
         """Download a file from Telegram by file_id. Returns local path."""
         try:
@@ -129,7 +187,11 @@ class TelegramBot:
             async with httpx.AsyncClient(timeout=35) as client:
                 resp = await client.get(
                     f"{self.base_url}/getUpdates",
-                    params={"offset": self._offset, "timeout": 30},
+                    params={
+                        "offset": self._offset,
+                        "timeout": 30,
+                        "allowed_updates": '["message","callback_query"]',
+                    },
                 )
                 if resp.status_code != 200:
                     return []
@@ -227,23 +289,28 @@ class TelegramBot:
                                 except Exception:
                                     pass
                             continue
-                        if cb_data:
-                            messages.append({
-                                "text": cb_data,
-                                "chat_id": cb_chat,
-                                "from": callback.get("from", {}).get("first_name", "Unknown"),
-                                "is_callback": True,
-                            })
-                        # Answer callback to remove loading state
-                        cb_id = callback.get("id")
-                        if cb_id:
-                            try:
-                                await client.post(
-                                    f"{self.base_url}/answerCallbackQuery",
-                                    json={"callback_query_id": cb_id},
-                                )
-                            except Exception:
-                                pass
+                        if cb_data and cb_data.startswith("approval:"):
+                            # Route approval callbacks to ApprovalStore — handle_callback_query
+                            # also answers the callback query, so skip the generic answer below
+                            await self.handle_callback_query(callback)
+                        else:
+                            if cb_data:
+                                messages.append({
+                                    "text": cb_data,
+                                    "chat_id": cb_chat,
+                                    "from": callback.get("from", {}).get("first_name", "Unknown"),
+                                    "is_callback": True,
+                                })
+                            # Answer callback to remove loading state
+                            cb_id = callback.get("id")
+                            if cb_id:
+                                try:
+                                    await client.post(
+                                        f"{self.base_url}/answerCallbackQuery",
+                                        json={"callback_query_id": cb_id},
+                                    )
+                                except Exception:
+                                    pass
                 return messages
         except Exception:
             return []

@@ -64,3 +64,125 @@ def test_get_mcp_logs(client):
     resp = client.get("/api/admin/mcp/servers/apple-mcp/logs")
     assert resp.status_code == 200
     admin_mod._db.get_mcp_calls.assert_called_once()
+
+
+# ── Task 14: Read endpoints (/api/mcp/...) ────────────────────────────
+
+@pytest.fixture
+def admin_app_client(tmp_path):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from backend.admin_api import router as admin_router
+    from backend import admin_api as mod
+    from backend.database import Database
+    from backend.mcp.registry import MCPRegistry
+    from backend.mcp.permissions import PermissionResolver
+    import asyncio
+
+    from backend.admin_api import mcp_router
+    app = FastAPI()
+    app.include_router(admin_router)
+    app.include_router(mcp_router)
+
+    loop = asyncio.new_event_loop()
+    db = Database(tmp_path / "t.db")
+    loop.run_until_complete(db.init())
+    reg = MCPRegistry()
+    loop.run_until_complete(reg.load_from_db(db))
+    resolver = PermissionResolver(db)
+
+    class FakeBridge:
+        def __init__(self): self.registry = reg
+        def get_stderr(self, sid): return ["line a", "line b"] if sid == "apple-mcp" else []
+        async def list_tools(self, sid): return []
+        async def discover_tools(self): return []
+
+    mod.set_dependencies(
+        db=db, scheduler=None, config_service=None, flow=None,
+        fact_memory=None, soul_memory=None, system_monitor=None,
+        mcp_bridge=FakeBridge(),
+        permission_resolver=resolver, approval_store=None,
+    )
+    with TestClient(app) as client:
+        yield client
+    loop.run_until_complete(db.close())
+    loop.close()
+
+
+def test_api_catalog_returns_entries(admin_app_client):
+    r = admin_app_client.get("/api/mcp/catalog")
+    assert r.status_code == 200
+    data = r.json()
+    ids = {x["id"] for x in data}
+    assert "apple-mcp" in ids
+    for entry in data:
+        assert "risk_level" in entry
+        assert "installed" in entry
+        assert "enabled" in entry
+
+
+def test_api_servers_returns_installed_only(admin_app_client):
+    r = admin_app_client.get("/api/mcp/servers")
+    assert r.status_code == 200
+    assert isinstance(r.json(), list)
+
+
+def test_api_logs(admin_app_client):
+    r = admin_app_client.get("/api/mcp/servers/apple-mcp/logs")
+    assert r.status_code == 200
+    assert "stderr" in r.json()
+
+
+def test_api_approvals_pending_empty(admin_app_client):
+    r = admin_app_client.get("/api/mcp/approvals/pending")
+    assert r.status_code == 200
+    assert isinstance(r.json(), list)
+
+
+def test_api_permissions_empty(admin_app_client):
+    r = admin_app_client.get("/api/mcp/permissions")
+    assert r.status_code == 200
+    assert isinstance(r.json(), list)
+
+
+# ── Task 15: Mutating endpoints ───────────────────────────────────────
+
+def test_api_install_triggers_installer(admin_app_client, tmp_path, monkeypatch):
+    from backend.mcp import installer as inst
+    calls = []
+    async def fake_install(sid, pkg, bin_name):
+        calls.append((sid, pkg, bin_name))
+        from backend.mcp.installer import InstallResult
+        return InstallResult(success=True, binary_path=tmp_path / "bin",
+                             error=None, stderr="")
+    monkeypatch.setattr(inst, "install", fake_install)
+    r = admin_app_client.post("/api/mcp/servers/apple-mcp/install",
+                              json={"config": {}})
+    assert r.status_code == 200
+    assert r.json()["status"] == "ok"
+    assert calls == [("apple-mcp", "apple-mcp", "apple-mcp")]
+
+
+def test_api_enable_sets_flag(admin_app_client):
+    r = admin_app_client.post("/api/mcp/servers/apple-mcp/enable")
+    assert r.status_code == 200
+
+
+def test_api_disable_clears_flag(admin_app_client):
+    admin_app_client.post("/api/mcp/servers/apple-mcp/enable")
+    r = admin_app_client.post("/api/mcp/servers/apple-mcp/disable")
+    assert r.status_code == 200
+
+
+def test_api_permission_put_and_delete(admin_app_client):
+    r = admin_app_client.put("/api/mcp/permissions/apple-mcp/some_tool",
+                             json={"decision": "deny"})
+    assert r.status_code == 200
+    r2 = admin_app_client.get("/api/mcp/permissions")
+    rows = r2.json()
+    assert any(x["server_id"] == "apple-mcp" and x["tool_name"] == "some_tool"
+               and x["decision"] == "deny" for x in rows)
+    r3 = admin_app_client.delete("/api/mcp/permissions/apple-mcp/some_tool")
+    assert r3.status_code == 200
+    r4 = admin_app_client.get("/api/mcp/permissions")
+    assert not any(x["tool_name"] == "some_tool" for x in r4.json())

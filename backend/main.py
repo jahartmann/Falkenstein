@@ -22,7 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.security.auth import BearerAuthMiddleware
 from backend.security.telegram_allowlist import TelegramAllowlist
 from backend.config_service import ConfigService
-from backend.admin_api import router as admin_router
+from backend.admin_api import router as admin_router, mcp_router
 from backend.workspace_api import router as workspace_router
 from backend import admin_api
 from backend.database import Database
@@ -42,6 +42,8 @@ from backend.tools.ops_executor import OpsExecutor
 from backend.memory.fact_memory import FactMemory
 from backend.system_monitor import SystemMonitor
 from backend.mcp import MCPBridge, MCPRegistry, create_all_mcp_tools
+from backend.mcp.permissions import PermissionResolver
+from backend.mcp.approvals import ApprovalStore
 
 log = logging.getLogger(__name__)
 
@@ -194,23 +196,32 @@ async def lifespan(app: FastAPI):
     )
 
     # ── MCP Bridge ────────────────────────────────────────────────────
-    vault_path_str = str(settings.obsidian_vault_path) if settings.obsidian_vault_path else ""
-    mcp_registry = MCPRegistry.from_settings(
-        server_ids=settings.mcp_servers,
-        enabled_flags={
-            "apple-mcp": settings.mcp_apple_enabled,
-            "desktop-commander": settings.mcp_desktop_commander_enabled,
-            "mcp-obsidian": settings.mcp_obsidian_enabled,
-        },
-        node_path=settings.mcp_node_path,
-        extra_args={
-            "mcp-obsidian": [vault_path_str] if vault_path_str else [],
-        },
-    )
+    mcp_registry = MCPRegistry()
+    # One-shot migration of legacy .env MCP flags (idempotent)
+    await mcp_registry.migrate_from_env(db, legacy_flags={
+        "mcp_apple_enabled": settings.mcp_apple_enabled,
+        "mcp_desktop_commander_enabled": settings.mcp_desktop_commander_enabled,
+        "mcp_obsidian_enabled": settings.mcp_obsidian_enabled,
+    })
+    await mcp_registry.load_from_db(db)
+
     mcp_bridge = MCPBridge(mcp_registry)
+    permission_resolver = PermissionResolver(db)
+    approval_timeout = config_service.get_int("mcp_approval_timeout_seconds", 600)
+    approval_store = ApprovalStore(
+        telegram_bot=telegram, ws_manager=ws_mgr, db=db,
+        timeout_seconds=approval_timeout,
+    )
+    telegram.approval_store = approval_store
+    mcp_bridge.attach_policy(resolver=permission_resolver, approval_store=approval_store)
+
     try:
         await mcp_bridge.start()
-        log.info("MCP Bridge started with %d servers", len(mcp_registry.list_enabled()))
+        installed_count = sum(
+            1 for s in mcp_registry.list_servers()
+            if mcp_registry.is_installed(s.config.id)
+        )
+        log.info("MCP Bridge started (%d installed servers)", installed_count)
     except Exception as e:
         log.warning("MCP Bridge start failed (non-fatal): %s", e)
 
@@ -276,6 +287,8 @@ async def lifespan(app: FastAPI):
         fact_memory=fact_memory,
         soul_memory=soul_memory, system_monitor=system_monitor,
         mcp_bridge=mcp_bridge,
+        permission_resolver=permission_resolver,
+        approval_store=approval_store,
     )
     admin_api.init(start_time=_time.time())
 
@@ -336,6 +349,7 @@ app = FastAPI(title="Falkenstein", lifespan=lifespan)
 app.add_middleware(BearerAuthMiddleware, api_token=API_TOKEN)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 app.include_router(admin_router)
+app.include_router(mcp_router)
 app.include_router(workspace_router)
 
 frontend_dir = Path(__file__).parent.parent / "frontend"

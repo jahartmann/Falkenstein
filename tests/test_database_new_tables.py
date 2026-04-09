@@ -138,3 +138,32 @@ async def test_set_config_upsert(db):
     # should still be only one row
     all_cfg = await db.get_all_config()
     assert len(all_cfg) == 1
+
+
+# ------------------------------------------------------------------
+# MCP tables
+# ------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_mcp_tables_exist_after_init(tmp_path):
+    db = Database(tmp_path / "test.db")
+    await db.init()
+    async with db._conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name IN "
+        "('mcp_servers', 'mcp_tool_permissions', 'mcp_approvals')"
+    ) as cur:
+        rows = await cur.fetchall()
+    names = {r[0] for r in rows}
+    assert names == {"mcp_servers", "mcp_tool_permissions", "mcp_approvals"}
+    await db.close()
+
+@pytest.mark.asyncio
+async def test_mcp_servers_columns(tmp_path):
+    db = Database(tmp_path / "test.db")
+    await db.init()
+    async with db._conn.execute("PRAGMA table_info(mcp_servers)") as cur:
+        rows = await cur.fetchall()
+    cols = {r[1] for r in rows}
+    assert {"id", "installed", "enabled", "config_json", "last_error",
+            "installed_at", "updated_at"} <= cols
+    await db.close()

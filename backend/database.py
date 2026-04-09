@@ -214,6 +214,35 @@ class Database:
                 triggered_by TEXT,
                 created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
+
+            CREATE TABLE IF NOT EXISTS mcp_servers (
+                id           TEXT PRIMARY KEY,
+                installed    INTEGER NOT NULL DEFAULT 0,
+                enabled      INTEGER NOT NULL DEFAULT 0,
+                config_json  TEXT,
+                last_error   TEXT,
+                installed_at DATETIME,
+                updated_at   DATETIME
+            );
+
+            CREATE TABLE IF NOT EXISTS mcp_tool_permissions (
+                server_id  TEXT NOT NULL,
+                tool_name  TEXT NOT NULL,
+                decision   TEXT NOT NULL CHECK (decision IN ('allow','ask','deny')),
+                updated_at DATETIME,
+                PRIMARY KEY (server_id, tool_name)
+            );
+
+            CREATE TABLE IF NOT EXISTS mcp_approvals (
+                id           TEXT PRIMARY KEY,
+                server_id    TEXT,
+                tool_name    TEXT,
+                args_json    TEXT,
+                decision     TEXT,
+                decided_by   TEXT,
+                requested_at DATETIME,
+                decided_at   DATETIME
+            );
         """)
         await self._conn.commit()
 
@@ -226,6 +255,13 @@ class Database:
             await self._conn.commit()
         except Exception:
             pass  # FTS5 not available or already exists
+
+        # Index for mcp_approvals time-based queries
+        await self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_mcp_approvals_requested_at "
+            "ON mcp_approvals(requested_at)"
+        )
+        await self._conn.commit()
 
         # Migrate existing tables — add columns if missing
         await self._migrate()

@@ -9,8 +9,12 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from backend.models import TaskStatus
+from backend.mcp.catalog import CATALOG
+from backend.mcp.permissions import PermissionResolver, classify_heuristic
+from backend.mcp import installer as _installer
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
+mcp_router = APIRouter(prefix="/api/mcp", tags=["mcp"])
 
 _start_time: float = 0.0
 
@@ -26,19 +30,23 @@ _fact_memory = None
 _soul_memory = None
 _system_monitor = None
 _mcp_bridge = None
+_permission_resolver: PermissionResolver | None = None
+_approval_store = None
 
 
 def set_dependencies(db=None, scheduler=None, config_service=None,
                      main_agent=None, flow=None, budget_tracker=None, llm_router=None,
                      fact_memory=None, soul_memory=None, system_monitor=None,
-                     mcp_bridge=None):
-    global _db, _scheduler, _config_service, _main_agent, _flow, _budget_tracker, _llm_router, _fact_memory, _soul_memory, _system_monitor, _mcp_bridge
+                     mcp_bridge=None, permission_resolver=None, approval_store=None):
+    global _db, _scheduler, _config_service, _main_agent, _flow, _budget_tracker, _llm_router, _fact_memory, _soul_memory, _system_monitor, _mcp_bridge, _permission_resolver, _approval_store
     _db = db; _scheduler = scheduler; _config_service = config_service
     _flow = flow; _main_agent = main_agent or flow  # Flow replaces MainAgent
     _budget_tracker = budget_tracker; _llm_router = llm_router
     _fact_memory = fact_memory; _soul_memory = soul_memory
     _system_monitor = system_monitor
     _mcp_bridge = mcp_bridge
+    _permission_resolver = permission_resolver
+    _approval_store = approval_store
 
 
 def init(start_time: float):
@@ -93,6 +101,26 @@ class ConfigBatchUpdate(BaseModel):
 
 class LLMRoutingUpdate(BaseModel):
     routing: dict[str, str]  # e.g. {"classify": "local", "action": "claude", ...}
+
+
+class MCPInstallBody(BaseModel):
+    config: dict = {}
+
+
+class MCPPermissionBody(BaseModel):
+    decision: str
+
+
+class MCPResolveBody(BaseModel):
+    decision: str  # allow | deny | allow_once
+
+
+async def _broadcast_mcp_state_changed():
+    try:
+        from backend.main import ws_mgr  # late import to avoid cycle
+        await ws_mgr.broadcast({"type": "mcp_state_changed"})
+    except Exception:
+        pass
 
 
 # ── Dashboard ────────────────────────────────────────────────────────
@@ -1095,3 +1123,242 @@ async def get_mcp_server_logs(server_id: str, limit: int = 50):
     if _db is None:
         return []
     return await _db.get_mcp_calls(limit=limit, server_id=server_id)
+
+
+# ── MCP Store API (/api/mcp/...) ─────────────────────────────────────
+
+def _mask_secrets(cfg: dict) -> dict:
+    import re
+    out = {}
+    for k, v in cfg.items():
+        if re.search(r"token|secret|password|key", k, re.I):
+            out[k] = "***"
+        else:
+            out[k] = v
+    return out
+
+
+@mcp_router.get("/catalog")
+async def api_mcp_catalog():
+    reg = _mcp_bridge.registry
+    out = []
+    for sid, entry in CATALOG.items():
+        srv = reg.get(sid)
+        out.append({
+            "id": sid,
+            "name": entry["name"],
+            "description": entry["description"],
+            "category": entry["category"],
+            "platform": entry["platform"],
+            "risk_level": entry["risk_level"],
+            "requires_config": entry["requires_config"],
+            "installed": reg.is_installed(sid) if hasattr(reg, "is_installed") else False,
+            "enabled": bool(srv.config.enabled) if srv else False,
+            "status": srv.status if srv else "stopped",
+        })
+    return out
+
+
+@mcp_router.get("/servers")
+async def api_mcp_servers():
+    reg = _mcp_bridge.registry
+    out = []
+    for srv in reg.list_servers():
+        sid = srv.config.id
+        if not reg.is_installed(sid):
+            continue
+        out.append({
+            "id": sid,
+            "name": srv.config.name,
+            "enabled": srv.config.enabled,
+            "status": srv.status,
+            "tools_count": srv.tools_count,
+            "last_error": srv.last_error,
+            "uptime_seconds": srv.uptime_seconds,
+        })
+    return out
+
+
+@mcp_router.get("/servers/{server_id}")
+async def api_mcp_server_detail(server_id: str):
+    reg = _mcp_bridge.registry
+    srv = reg.get(server_id)
+    if srv is None:
+        return {"error": "not found"}
+    entry = CATALOG.get(server_id, {})
+    return {
+        "id": server_id,
+        "name": srv.config.name,
+        "description": entry.get("description", ""),
+        "installed": reg.is_installed(server_id),
+        "enabled": srv.config.enabled,
+        "status": srv.status,
+        "tools_count": srv.tools_count,
+        "last_error": srv.last_error,
+        "uptime_seconds": srv.uptime_seconds,
+        "user_config": _mask_secrets(reg.get_user_config(server_id)),
+    }
+
+
+@mcp_router.get("/servers/{server_id}/logs")
+async def api_mcp_server_logs(server_id: str):
+    lines = _mcp_bridge.get_stderr(server_id) if hasattr(_mcp_bridge, "get_stderr") else []
+    return {"stderr": lines}
+
+
+@mcp_router.get("/servers/{server_id}/tools")
+async def api_mcp_server_tools(server_id: str):
+    reg = _mcp_bridge.registry
+    srv = reg.get(server_id)
+    if srv is None or not reg.is_installed(server_id):
+        return []
+    tools = await _mcp_bridge.list_tools(server_id)
+    out = []
+    for t in tools:
+        source = "heuristic"
+        decision = classify_heuristic(t.name)
+        entry = CATALOG.get(server_id, {})
+        if t.name in entry.get("permissions", {}):
+            decision = entry["permissions"][t.name]
+            source = "catalog"
+        if _permission_resolver is not None:
+            async with _db._conn.execute(
+                "SELECT decision FROM mcp_tool_permissions WHERE server_id=? AND tool_name=?",
+                (server_id, t.name),
+            ) as cur:
+                row = await cur.fetchone()
+                if row:
+                    decision = row[0]
+                    source = "db"
+        out.append({
+            "name": t.name,
+            "description": t.description,
+            "permission": decision,
+            "source": source,
+        })
+    return out
+
+
+@mcp_router.get("/permissions")
+async def api_mcp_permissions_list():
+    if _permission_resolver is None:
+        return []
+    return await _permission_resolver.list_overrides()
+
+
+@mcp_router.get("/approvals/pending")
+async def api_mcp_approvals_pending():
+    if _approval_store is None:
+        return []
+    return [
+        {"id": a.id, "server_id": a.server_id, "tool_name": a.tool_name,
+         "args": a.args, "created_at": a.created_at}
+        for a in _approval_store.list_pending()
+    ]
+
+
+@mcp_router.get("/approvals/history")
+async def api_mcp_approvals_history(limit: int = 50):
+    rows = []
+    async with _db._conn.execute(
+        """SELECT id, server_id, tool_name, decision, decided_by,
+                  requested_at, decided_at
+           FROM mcp_approvals ORDER BY requested_at DESC LIMIT ?""",
+        (limit,),
+    ) as cur:
+        async for r in cur:
+            rows.append({
+                "id": r[0], "server_id": r[1], "tool_name": r[2],
+                "decision": r[3], "decided_by": r[4],
+                "requested_at": r[5], "decided_at": r[6],
+            })
+    return rows
+
+
+# ── MCP Mutating endpoints ────────────────────────────────────────────
+
+@mcp_router.post("/servers/{server_id}/install")
+async def api_mcp_install(server_id: str, body: MCPInstallBody):
+    entry = CATALOG.get(server_id)
+    if entry is None:
+        return {"status": "error", "error": "not in catalog"}
+    result = await _installer.install(server_id, entry["package"], entry["bin"])
+    if not result.success:
+        return {"status": "error", "error": result.error, "stderr": result.stderr}
+    reg = _mcp_bridge.registry
+    await reg.set_installed(_db, server_id, True, config=body.config)
+    await _broadcast_mcp_state_changed()
+    return {"status": "ok"}
+
+
+@mcp_router.post("/servers/{server_id}/uninstall")
+async def api_mcp_uninstall(server_id: str):
+    reg = _mcp_bridge.registry
+    # Stop first if running
+    if hasattr(_mcp_bridge, "_stop_server") and server_id in getattr(_mcp_bridge, "_handles", {}):
+        await _mcp_bridge._stop_server(server_id)
+    ok = await _installer.uninstall(server_id)
+    await reg.set_installed(_db, server_id, False)
+    await reg.set_enabled(_db, server_id, False)
+    await _broadcast_mcp_state_changed()
+    return {"status": "ok" if ok else "error"}
+
+
+@mcp_router.post("/servers/{server_id}/enable")
+async def api_mcp_enable(server_id: str):
+    reg = _mcp_bridge.registry
+    await reg.set_enabled(_db, server_id, True)
+    if hasattr(_mcp_bridge, "_start_server") and server_id not in getattr(_mcp_bridge, "_handles", {}):
+        try:
+            await _mcp_bridge._start_server(server_id, 45.0)
+        except Exception as e:
+            return {"status": "error", "error": str(e)}
+    await _broadcast_mcp_state_changed()
+    return {"status": "ok"}
+
+
+@mcp_router.post("/servers/{server_id}/disable")
+async def api_mcp_disable(server_id: str):
+    reg = _mcp_bridge.registry
+    await reg.set_enabled(_db, server_id, False)
+    if hasattr(_mcp_bridge, "_stop_server") and server_id in getattr(_mcp_bridge, "_handles", {}):
+        await _mcp_bridge._stop_server(server_id)
+    await _broadcast_mcp_state_changed()
+    return {"status": "ok"}
+
+
+@mcp_router.post("/servers/{server_id}/restart")
+async def api_mcp_restart(server_id: str):
+    if hasattr(_mcp_bridge, "restart_server"):
+        await _mcp_bridge.restart_server(server_id)
+    await _broadcast_mcp_state_changed()
+    return {"status": "ok"}
+
+
+@mcp_router.put("/permissions/{server_id}/{tool_name}")
+async def api_mcp_permission_put(server_id: str, tool_name: str, body: MCPPermissionBody):
+    if _permission_resolver is None:
+        return {"status": "error", "error": "resolver not wired"}
+    try:
+        await _permission_resolver.set_override(server_id, tool_name, body.decision)
+    except ValueError as e:
+        return {"status": "error", "error": str(e)}
+    await _broadcast_mcp_state_changed()
+    return {"status": "ok"}
+
+
+@mcp_router.delete("/permissions/{server_id}/{tool_name}")
+async def api_mcp_permission_delete(server_id: str, tool_name: str):
+    if _permission_resolver is None:
+        return {"status": "error", "error": "resolver not wired"}
+    await _permission_resolver.clear_override(server_id, tool_name)
+    await _broadcast_mcp_state_changed()
+    return {"status": "ok"}
+
+
+@mcp_router.post("/approvals/{approval_id}/resolve")
+async def api_mcp_approval_resolve(approval_id: str, body: MCPResolveBody):
+    if _approval_store is None:
+        return {"status": "error", "error": "no approval store"}
+    ok = _approval_store.resolve(approval_id, body.decision, "ws")
+    return {"status": "ok" if ok else "already_resolved"}

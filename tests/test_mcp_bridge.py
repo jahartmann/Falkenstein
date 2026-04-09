@@ -1,16 +1,22 @@
 """Tests for MCPBridge — server lifecycle and tool execution."""
 from __future__ import annotations
 import asyncio
+import concurrent.futures
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from backend.mcp.bridge import MCPBridge, DEFAULT_START_TIMEOUT
+from backend.mcp.bridge import MCPBridge, DEFAULT_START_TIMEOUT, ToolResult, _ServerHandle
 from backend.mcp.config import MCPServerConfig, ToolSchema
 from backend.mcp.registry import MCPRegistry
 
 @pytest.fixture
 def registry():
+    """Build a registry with a test-server pre-seeded (no DB needed)."""
+    from backend.mcp.config import ServerStatus
     reg = MCPRegistry()
-    reg.register(MCPServerConfig(id="test-server", name="Test Server", command="echo", args=["hello"]))
+    cfg = MCPServerConfig(id="test-server", name="Test Server", command="echo", args=["hello"])
+    reg._servers["test-server"] = ServerStatus(config=cfg)
+    reg._installed["test-server"] = False
+    reg._user_configs["test-server"] = {}
     return reg
 
 @pytest.fixture
@@ -79,3 +85,188 @@ async def test_bridge_discover_tools_aggregates(bridge):
     assert len(tools) == 1
     assert tools[0].name == "test_tool"
     assert tools[0].server_id == "test-server"
+
+
+class _FakeSessionResult:
+    def __init__(self, text):
+        self.content = [type("B", (), {"text": text})()]
+        self.isError = False
+
+
+@pytest.mark.asyncio
+async def test_call_tool_threadsafe_from_other_thread():
+    """REGRESSION: CrewAI calls run in a thread pool; the bridge must
+    handle calls from threads other than the main loop. Previously this
+    created a fresh event loop and died with 'attached to different loop'."""
+    reg = MCPRegistry()
+    bridge = MCPBridge(reg)
+    bridge._main_loop = asyncio.get_running_loop()
+
+    fake_session = MagicMock()
+    fake_session.call_tool = AsyncMock(return_value=_FakeSessionResult("ok"))
+    handle = _ServerHandle(session=fake_session, task=None, start_time=0.0)
+    bridge._handles["fakesrv"] = handle
+
+    loop = asyncio.get_running_loop()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        result = await loop.run_in_executor(
+            pool,
+            lambda: bridge.call_tool_threadsafe("fakesrv", "ping", {"x": 1}),
+        )
+    assert isinstance(result, ToolResult)
+    assert result.success is True
+    assert result.output == "ok"
+    fake_session.call_tool.assert_awaited_once_with("ping", arguments={"x": 1})
+
+
+@pytest.mark.asyncio
+async def test_call_tool_threadsafe_unknown_server():
+    reg = MCPRegistry()
+    bridge = MCPBridge(reg)
+    bridge._main_loop = asyncio.get_running_loop()
+    result = bridge.call_tool_threadsafe("nope", "x", {})
+    assert result.success is False
+    assert "not connected" in result.output.lower()
+
+
+import collections
+
+@pytest.mark.asyncio
+async def test_stderr_ring_buffer_capture():
+    reg = MCPRegistry()
+    bridge = MCPBridge(reg)
+    handle = _ServerHandle(session=None, task=None, start_time=0.0)
+    assert isinstance(handle.stderr, collections.deque)
+    assert handle.stderr.maxlen == 200
+    for i in range(250):
+        handle.stderr.append(f"line {i}")
+    assert len(handle.stderr) == 200
+    assert handle.stderr[0] == "line 50"
+
+
+@pytest.mark.asyncio
+async def test_get_stderr_returns_snapshot():
+    reg = MCPRegistry()
+    bridge = MCPBridge(reg)
+    handle = _ServerHandle(session=None, task=None, start_time=0.0)
+    handle.stderr.extend(["a", "b", "c"])
+    bridge._handles["srv"] = handle
+    lines = bridge.get_stderr("srv")
+    assert lines == ["a", "b", "c"]
+    assert bridge.get_stderr("missing") == []
+
+
+@pytest.mark.asyncio
+async def test_bridge_emits_event_log(tmp_path, monkeypatch):
+    from backend.mcp import bridge as bmod
+    monkeypatch.setattr(bmod, "EVENT_LOG_PATH", tmp_path / "mcp_events.log")
+    reg = MCPRegistry()
+    b = MCPBridge(reg)
+    b._emit_event("start_attempt", server_id="apple-mcp")
+    log_text = (tmp_path / "mcp_events.log").read_text()
+    assert '"event": "start_attempt"' in log_text
+    assert '"server_id": "apple-mcp"' in log_text
+
+
+@pytest.mark.asyncio
+async def test_start_skips_when_not_installed(tmp_path, monkeypatch):
+    from backend.mcp import installer as inst
+    monkeypatch.setattr(inst, "INSTALL_ROOT", tmp_path)
+    from backend.mcp.registry import MCPRegistry
+    from backend.database import Database
+    db = Database(tmp_path / "t.db"); await db.init()
+    reg = MCPRegistry()
+    await reg.load_from_db(db)
+    await reg.set_enabled(db, "apple-mcp", True)
+    b = MCPBridge(reg)
+    await b.start(timeout=2)
+    # apple-mcp is enabled but not installed → status=not_installed, no handle
+    assert reg.get("apple-mcp").status == "not_installed"
+    assert "apple-mcp" not in b._handles
+    await b.stop()
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_bridge_health_check_marks_dead_task():
+    from backend.mcp.config import MCPServerConfig, ServerStatus
+    reg = MCPRegistry()
+    cfg = MCPServerConfig(id="x", name="X", command="nope", args=[])
+    reg._servers["x"] = ServerStatus(config=cfg)
+    reg._installed["x"] = False
+    reg._user_configs["x"] = {}
+    b = MCPBridge(reg)
+    reg.update_status("x", status="running")
+
+    async def _done():
+        return None
+    task = asyncio.create_task(_done())
+    await task
+    handle = _ServerHandle(session=MagicMock(), task=task, start_time=0.0)
+    b._handles["x"] = handle
+    await b._health_tick()
+    assert reg.get("x").status == "error"
+
+
+@pytest.mark.asyncio
+async def test_call_tool_denied_by_permission(tmp_path):
+    from backend.mcp.registry import MCPRegistry
+    from backend.database import Database
+    from backend.mcp.permissions import PermissionResolver
+    db = Database(tmp_path / "t.db"); await db.init()
+    reg = MCPRegistry()
+    await reg.load_from_db(db)
+    resolver = PermissionResolver(db)
+    await resolver.set_override("apple-mcp", "delete_all", "deny")
+    bridge = MCPBridge(reg)
+    bridge.attach_policy(resolver=resolver, approval_store=None)
+    bridge._main_loop = asyncio.get_running_loop()
+    bridge._handles["apple-mcp"] = _ServerHandle(
+        session=MagicMock(), task=None, start_time=0.0,
+    )
+    result = await bridge.call_tool("apple-mcp", "delete_all", {})
+    assert result.success is False
+    assert "denied" in result.output.lower()
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_call_tool_asks_then_allows(tmp_path):
+    from backend.mcp.registry import MCPRegistry
+    from backend.database import Database
+    from backend.mcp.permissions import PermissionResolver
+    from backend.mcp.approvals import ApprovalStore
+
+    db = Database(tmp_path / "t.db"); await db.init()
+    reg = MCPRegistry()
+    await reg.load_from_db(db)
+    resolver = PermissionResolver(db)
+
+    tg = MagicMock()
+    tg.enabled = True
+    tg.send_approval_request = AsyncMock()
+    ws = MagicMock()
+    ws.broadcast = AsyncMock()
+    store = ApprovalStore(tg, ws, db, timeout_seconds=5)
+
+    bridge = MCPBridge(reg)
+    bridge.attach_policy(resolver=resolver, approval_store=store)
+    bridge._main_loop = asyncio.get_running_loop()
+
+    fake_session = MagicMock()
+    fake_session.call_tool = AsyncMock(return_value=_FakeSessionResult("done"))
+    bridge._handles["apple-mcp"] = _ServerHandle(
+        session=fake_session, task=None, start_time=0.0,
+    )
+
+    async def approver():
+        await asyncio.sleep(0.05)
+        pending = store.list_pending()
+        assert len(pending) == 1
+        store.resolve(pending[0].id, "allow", "telegram")
+    asyncio.create_task(approver())
+
+    result = await bridge.call_tool("apple-mcp", "send_message", {"to": "x"})
+    assert result.success is True
+    assert result.output == "done"
+    await db.close()
