@@ -1684,21 +1684,49 @@ const MCPStore = (() => {
     ).join("") || "<p>No configuration required.</p>";
     openModal();
     document.getElementById("mcp-install-confirm").onclick = async () => {
+      const btn = document.getElementById("mcp-install-confirm");
+      btn.disabled = true;
+      const prev = btn.textContent;
+      btn.textContent = "Installing...";
+
+      // Clear any previous error display
+      const oldErr = form.querySelector(".mcp-install-error");
+      if (oldErr) oldErr.remove();
+
       const cfg = {};
       (entry.requires_config || []).forEach(k => {
         const input = form.querySelector(`[name="${k}"]`);
         if (input) cfg[k] = input.value;
       });
-      const r = await fetch(`/api/mcp/servers/${serverId}/install`, {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({config: cfg}),
-      }).then(r => r.json());
+
+      let r;
+      try {
+        r = await fetch(`/api/mcp/servers/${serverId}/install`, {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({config: cfg}),
+        }).then(r => r.json());
+      } catch (e) {
+        const errBox = document.createElement("pre");
+        errBox.className = "mcp-logs-box mcp-install-error";
+        errBox.textContent = `Network error: ${e}`;
+        form.appendChild(errBox);
+        btn.disabled = false;
+        btn.textContent = prev;
+        return;
+      }
+
+      btn.disabled = false;
+      btn.textContent = prev;
+
       if (r.status === "ok") {
         closeModal();
         fetchAll();
       } else {
-        alert(`Install failed: ${r.error || "unknown"}\n${r.stderr || ""}`);
+        const errBox = document.createElement("pre");
+        errBox.className = "mcp-logs-box mcp-install-error";
+        errBox.textContent = `Error: ${r.error || "unknown"}\n\n${r.stderr || ""}`;
+        form.appendChild(errBox);
       }
     };
     document.getElementById("mcp-install-cancel").onclick = closeModal;
@@ -1729,18 +1757,36 @@ const MCPStore = (() => {
     fetchAll();
   }
 
-  return { init, fetchAll };
+  let _refreshTimer = null;
+  function startAutoRefresh() {
+    if (_refreshTimer) return;
+    _refreshTimer = setInterval(fetchAll, 15000);
+  }
+  function stopAutoRefresh() {
+    if (_refreshTimer) {
+      clearInterval(_refreshTimer);
+      _refreshTimer = null;
+    }
+  }
+
+  return { init, fetchAll, startAutoRefresh, stopAutoRefresh };
 })();
 
 // Hook sidebar activation: when the user clicks the mcp-store sidebar button,
 // initialize the store (once) and refetch on subsequent activations.
 (function hookMCPStoreActivation() {
   document.addEventListener('click', (e) => {
-    const btn = e.target.closest('[data-section="mcp-store"]');
-    if (btn) {
-      // Slight delay so the existing switcher has time to activate the section
-      setTimeout(() => MCPStore.init(), 10);
-    }
+    const btn = e.target.closest('[data-section]');
+    if (!btn) return;
+    const section = btn.dataset.section;
+    setTimeout(() => {
+      if (section === 'mcp-store') {
+        MCPStore.init();
+        MCPStore.startAutoRefresh();
+      } else {
+        MCPStore.stopAutoRefresh();
+      }
+    }, 10);
   });
 })();
 
