@@ -1,8 +1,9 @@
 """Tests for MCP → CrewAI tool adapter."""
 from __future__ import annotations
 import pytest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 from crewai.tools import BaseTool
+from backend.mcp.bridge import ToolResult
 from backend.mcp.config import ToolSchema
 from backend.mcp.tool_adapter import create_mcp_tool, create_all_mcp_tools
 
@@ -32,14 +33,14 @@ def test_create_mcp_tool_description():
 
 def test_create_mcp_tool_run():
     bridge = MagicMock()
-    bridge.call_tool = AsyncMock(return_value=MagicMock(success=True, output="Reminder created"))
+    bridge.call_tool_threadsafe = MagicMock(return_value=ToolResult(success=True, output="Reminder created"))
     tool = create_mcp_tool(_sample_schema(), bridge)
     result = tool._run(title="Meeting", due_date="2026-04-09T09:00:00")
     assert result == "Reminder created"
 
 def test_create_mcp_tool_run_error():
     bridge = MagicMock()
-    bridge.call_tool = AsyncMock(return_value=MagicMock(success=False, output="Server down"))
+    bridge.call_tool_threadsafe = MagicMock(return_value=ToolResult(success=False, output="Server down"))
     tool = create_mcp_tool(_sample_schema(), bridge)
     result = tool._run(title="Meeting")
     assert "Error" in result

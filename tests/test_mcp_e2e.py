@@ -17,6 +17,7 @@ def mock_bridge():
     reg._user_configs["apple-mcp"] = {}
     bridge = MCPBridge(reg)
     bridge.call_tool = AsyncMock(return_value=ToolResult(success=True, output="Erinnerung erstellt"))
+    bridge.call_tool_threadsafe = MagicMock(return_value=ToolResult(success=True, output="Erinnerung erstellt"))
     bridge.discover_tools = AsyncMock(return_value=[
         ToolSchema(name="create_reminder", description="Create reminder", server_id="apple-mcp",
                    input_schema={"type": "object", "properties": {"title": {"type": "string"}}}),

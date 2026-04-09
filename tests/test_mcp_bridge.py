@@ -169,6 +169,25 @@ async def test_bridge_emits_event_log(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_start_skips_when_not_installed(tmp_path, monkeypatch):
+    from backend.mcp import installer as inst
+    monkeypatch.setattr(inst, "INSTALL_ROOT", tmp_path)
+    from backend.mcp.registry import MCPRegistry
+    from backend.database import Database
+    db = Database(tmp_path / "t.db"); await db.init()
+    reg = MCPRegistry()
+    await reg.load_from_db(db)
+    await reg.set_enabled(db, "apple-mcp", True)
+    b = MCPBridge(reg)
+    await b.start(timeout=2)
+    # apple-mcp is enabled but not installed → status=not_installed, no handle
+    assert reg.get("apple-mcp").status == "not_installed"
+    assert "apple-mcp" not in b._handles
+    await b.stop()
+    await db.close()
+
+
+@pytest.mark.asyncio
 async def test_bridge_health_check_marks_dead_task():
     from backend.mcp.config import MCPServerConfig, ServerStatus
     reg = MCPRegistry()

@@ -84,12 +84,56 @@ class MCPBridge:
         for sid in list(self._handles):
             await self._stop_server(sid)
 
+    def _build_args(self, server_id: str, catalog_entry: dict, user_cfg: dict) -> list[str]:
+        """Assemble CLI args from catalog + user config."""
+        args: list[str] = []
+        # mcp-obsidian expects vault_path as positional
+        if server_id == "mcp-obsidian" and user_cfg.get("vault_path"):
+            args.append(user_cfg["vault_path"])
+        # filesystem expects allowed_directories (comma-separated string OR list)
+        if server_id == "filesystem":
+            dirs = user_cfg.get("allowed_directories", "")
+            if isinstance(dirs, str):
+                dirs = [d.strip() for d in dirs.split(",") if d.strip()]
+            args.extend(dirs)
+        return args
+
+    def _build_env(self, catalog_entry: dict, user_cfg: dict) -> dict:
+        """Env vars required by this MCP (API keys etc.). Uppercase keys → env."""
+        env = {}
+        for key in catalog_entry.get("requires_config", []):
+            if key.isupper() and key in user_cfg:
+                env[key] = str(user_cfg[key])
+        return env
+
     async def _start_server(self, server_id: str, timeout: float) -> None:
         """Start a single MCP server using the SDK's stdio_client."""
+        from backend.mcp.catalog import CATALOG
+        from backend.mcp import installer
+
         status = self.registry.get(server_id)
         if status is None:
             return
         cfg = status.config
+
+        # Catalog-driven resolution: require installed binary
+        catalog_entry = CATALOG.get(server_id)
+        if catalog_entry is None:
+            self.registry.update_status(server_id, status="error",
+                                        last_error="not in catalog")
+            return
+        binary = installer.resolve_binary(server_id, catalog_entry["bin"])
+        if binary is None:
+            self.registry.update_status(server_id, status="not_installed",
+                                        last_error=None)
+            self._emit_event("start_skipped_not_installed", server_id=server_id)
+            return
+        # Override cfg.command with resolved absolute path; build args + env
+        cfg.command = str(binary)
+        user_cfg = self.registry.get_user_config(server_id) if hasattr(self.registry, "get_user_config") else {}
+        cfg.args = self._build_args(server_id, catalog_entry, user_cfg)
+        cfg.env = self._build_env(catalog_entry, user_cfg)
+
         self._emit_event("start_attempt", server_id=server_id)
 
         # Event signals the background task to shut down
