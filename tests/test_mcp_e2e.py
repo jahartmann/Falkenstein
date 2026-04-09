@@ -9,8 +9,12 @@ from backend.flow.falkenstein_flow import FalkensteinFlow
 
 @pytest.fixture
 def mock_bridge():
+    from backend.mcp.config import ServerStatus
     reg = MCPRegistry()
-    reg.register(MCPServerConfig(id="apple-mcp", name="Apple", command="echo", args=[]))
+    cfg = MCPServerConfig(id="apple-mcp", name="Apple", command="echo", args=[])
+    reg._servers["apple-mcp"] = ServerStatus(config=cfg)
+    reg._installed["apple-mcp"] = False
+    reg._user_configs["apple-mcp"] = {}
     bridge = MCPBridge(reg)
     bridge.call_tool = AsyncMock(return_value=ToolResult(success=True, output="Erinnerung erstellt"))
     bridge.discover_tools = AsyncMock(return_value=[

@@ -10,8 +10,13 @@ from backend.mcp.registry import MCPRegistry
 
 @pytest.fixture
 def registry():
+    """Build a registry with a test-server pre-seeded (no DB needed)."""
+    from backend.mcp.config import ServerStatus
     reg = MCPRegistry()
-    reg.register(MCPServerConfig(id="test-server", name="Test Server", command="echo", args=["hello"]))
+    cfg = MCPServerConfig(id="test-server", name="Test Server", command="echo", args=["hello"])
+    reg._servers["test-server"] = ServerStatus(config=cfg)
+    reg._installed["test-server"] = False
+    reg._user_configs["test-server"] = {}
     return reg
 
 @pytest.fixture
@@ -165,9 +170,12 @@ async def test_bridge_emits_event_log(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_bridge_health_check_marks_dead_task():
+    from backend.mcp.config import MCPServerConfig, ServerStatus
     reg = MCPRegistry()
-    from backend.mcp.config import MCPServerConfig
-    reg.register(MCPServerConfig(id="x", name="X", command="nope", args=[]))
+    cfg = MCPServerConfig(id="x", name="X", command="nope", args=[])
+    reg._servers["x"] = ServerStatus(config=cfg)
+    reg._installed["x"] = False
+    reg._user_configs["x"] = {}
     b = MCPBridge(reg)
     reg.update_status("x", status="running")
 

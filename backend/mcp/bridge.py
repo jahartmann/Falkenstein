@@ -219,7 +219,9 @@ class MCPBridge:
         await self._start_server(server_id, DEFAULT_START_TIMEOUT)
 
     async def toggle_server(self, server_id: str, enabled: bool) -> None:
-        self.registry.toggle(server_id, enabled)
+        s = self.registry.get(server_id)
+        if s is not None:
+            s.config.enabled = enabled
         if not enabled:
             await self._stop_server(server_id)
         elif enabled and server_id not in self._handles:
