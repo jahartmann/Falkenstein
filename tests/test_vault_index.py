@@ -133,3 +133,10 @@ def test_full_path_resolves_correctly(index: VaultIndex, mock_vault: Path) -> No
     p = index.full_path("KI-Buero/Recherchen/crewai-overview.md")
     assert p == mock_vault / "KI-Buero" / "Recherchen" / "crewai-overview.md"
     assert p.exists()
+
+
+def test_find_best_folder_prefers_existing_canonical_root(tmp_path: Path) -> None:
+    (tmp_path / "KI-Büro" / "Reports").mkdir(parents=True)
+    vi = VaultIndex(tmp_path)
+    vi.scan()
+    assert vi.find_best_folder("analyst") == "KI-Büro/Reports"

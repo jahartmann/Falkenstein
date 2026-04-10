@@ -206,7 +206,7 @@ export class ObjectManager {
       <div style="margin-bottom:12px">
         <span style="color:#888">Name:</span> <span style="color:#e0e0ff">${agent.name}</span>
         <span style="color:#888;margin-left:16px">Rolle:</span> <span style="color:#e0e0ff">${agent.role || agent.agentType || '—'}</span>
-        <span style="color:#888;margin-left:16px">Status:</span> <span style="color:#44ff88">${agent.state}</span>
+        <span style="color:#888;margin-left:16px">Status:</span> <span style="color:#44ff88">${agent.statusText || agent.state}</span>
       </div>
       <div style="margin-bottom:12px">
         <span style="color:#888">Task:</span>

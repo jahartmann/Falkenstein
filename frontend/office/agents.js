@@ -76,6 +76,17 @@ const NPC_THOUGHTS = [
   'Fast da...', 'Gute Idee!', '...',
 ];
 
+const STATUS_COLORS = {
+  arriving: '#8ec5ff',
+  working: '#44ff88',
+  progress: '#8fe6ff',
+  break: '#ffd36e',
+  done: '#7cffc2',
+  error: '#ff8f8f',
+  leaving: '#c8ccd8',
+  npc: '#d9d9d9',
+};
+
 export class AgentManager {
   constructor(scene, tilemapManager) {
     this.scene = scene;
@@ -163,17 +174,19 @@ export class AgentManager {
 
     // Name label
     const label = this._createLabel(pos.x, pos.y, npcConfig.name, '#cccccc');
+    const statusLabel = this._createStatusLabel(pos.x, pos.y, 'kommt an', STATUS_COLORS.arriving);
 
     const agent = {
       id: npcConfig.id,
       name: npcConfig.name,
       spriteName: npcConfig.sprite,
       agentType: null,
-      sprite, label,
+      sprite, label, statusLabel,
       indicator: null,
       desk,
       role: npcConfig.role,
       task: npcConfig.role,
+      statusText: 'kommt an',
       tileX: spawnTile.x, tileY: spawnTile.y,
       state: 'walking_to_desk',
       path: null, pathIndex: 0, tweenActive: false,
@@ -223,16 +236,18 @@ export class AgentManager {
     // Green label for real agents
     const displayName = agentType.charAt(0).toUpperCase() + agentType.slice(1);
     const label = this._createLabel(pos.x, pos.y, displayName, '#44ff88');
+    const statusLabel = this._createStatusLabel(pos.x, pos.y, 'wartet', STATUS_COLORS.arriving);
 
     const agent = {
       id: agentId,
       name: displayName,
       spriteName: cfg.sprite,
       agentType: agentType,
-      sprite, label, indicator,
+      sprite, label, statusLabel, indicator,
       desk,
       role: agentType,
       task: taskText || '',
+      statusText: 'wartet',
       tileX: spawnTile.x, tileY: spawnTile.y,
       state: 'walking_to_desk',
       path: null, pathIndex: 0, tweenActive: false,
@@ -257,6 +272,7 @@ export class AgentManager {
     if (agent.pauseTimer) clearTimeout(agent.pauseTimer);
 
     agent.state = 'leaving';
+    this._setAgentStatus(agent, 'geht', STATUS_COLORS.leaving);
     this.scene.tweens.killTweensOf(agent.sprite);
     if (agent.indicator) this.scene.tweens.killTweensOf(agent.indicator);
 
@@ -264,6 +280,7 @@ export class AgentManager {
     this._walkTo(agent, entrance.x, entrance.y, () => {
       agent.sprite.destroy();
       if (agent.label) agent.label.destroy();
+      if (agent.statusLabel) agent.statusLabel.destroy();
       if (agent.indicator) agent.indicator.destroy();
       this.agents.delete(agentId);
       this.occupiedTiles.delete(this._tileKey(agent.tileX, agent.tileY));
@@ -277,6 +294,9 @@ export class AgentManager {
       if (agent.label) {
         agent.label.setPosition(agent.sprite.x, agent.sprite.y - 32);
       }
+      if (agent.statusLabel) {
+        agent.statusLabel.setPosition(agent.sprite.x, agent.sprite.y - 18);
+      }
       if (agent.indicator) {
         agent.indicator.setPosition(agent.sprite.x, agent.sprite.y + 24);
       }
@@ -288,6 +308,7 @@ export class AgentManager {
   _sitDown(agent) {
     agent.state = 'working';
     agent.sprite.anims.play(`${agent.spriteName}_sit`, true);
+    this._setAgentStatus(agent, 'arbeitet', STATUS_COLORS.working);
     // Occasionally show a "back to work" bubble
     if (agent.isNPC && Math.random() < 0.3) {
       const lines = ['Los geht\'s!', 'Back to work', 'Weiter...', 'Ok, los!'];
@@ -342,6 +363,7 @@ export class AgentManager {
   _goOnBreak(agent) {
     agent.state = 'on_break';
     agent.breakCount++;
+    this._setAgentStatus(agent, 'pause', STATUS_COLORS.break);
     // Cancel random-thought timer while on break
     if (agent.thoughtTimer) { clearTimeout(agent.thoughtTimer); agent.thoughtTimer = null; }
 
@@ -350,6 +372,7 @@ export class AgentManager {
     if (activity === 'stretch') {
       // Stand and stretch at desk — no walking
       agent.sprite.anims.play(`${agent.spriteName}_idle_down`, true);
+      this._setAgentStatus(agent, 'stretch', STATUS_COLORS.break);
       this._showBubble(agent, 'Kurze Pause...', 3000);
       const dur = 3000 + Math.random() * 2000;
       setTimeout(() => {
@@ -362,6 +385,7 @@ export class AgentManager {
     if (activity === 'phone') {
       // Phone call at desk
       agent.sprite.anims.play(`${agent.spriteName}_phone`, true);
+      this._setAgentStatus(agent, 'telefoniert', STATUS_COLORS.break);
       this._showBubble(agent, 'Moment bitte...', 4000);
       setTimeout(() => {
         if (agent.state !== 'on_break') return;
@@ -380,6 +404,7 @@ export class AgentManager {
         const ty = colleague.desk.tileY + offY;
         this._walkTo(agent, tx, ty, () => {
           agent.sprite.anims.play(`${agent.spriteName}_idle_down`, true);
+          this._setAgentStatus(agent, 'kurzer Austausch', STATUS_COLORS.break);
           const chatLines = ['Kurze Frage...', 'Hast du kurz?', 'Hey!', 'Mal kurz...'];
           this._showBubble(agent, chatLines[Math.floor(Math.random() * chatLines.length)], 5000);
           // Colleague reacts
@@ -409,6 +434,7 @@ export class AgentManager {
         const ty = room.centerY + Math.floor(Math.random() * 3) - 1;
         this._walkTo(agent, tx, ty, () => {
           agent.sprite.anims.play(`${agent.spriteName}_idle_down`, true);
+          this._setAgentStatus(agent, 'holt Kaffee', STATUS_COLORS.break);
           this._showBubble(agent, 'Erstmal Kaffee...', 4000);
           // Check for colleagues also in the kitchen and chat
           const buddy = this._findAgentInRoom(agent, 'Küche');
@@ -436,6 +462,7 @@ export class AgentManager {
         const ty = room.centerY + Math.floor(Math.random() * 3) - 1;
         this._walkTo(agent, tx, ty, () => {
           agent.sprite.anims.play(`${agent.spriteName}_idle_up`, true);
+          this._setAgentStatus(agent, 'am Whiteboard', STATUS_COLORS.break);
           this._showBubble(agent, 'Hmm...', 3000);
           const dur = 5000 + Math.random() * 3000;
           setTimeout(() => {
@@ -459,6 +486,7 @@ export class AgentManager {
 
     this._walkTo(agent, targetX, targetY, () => {
       agent.sprite.anims.play(`${agent.spriteName}_idle_down`, true);
+      this._setAgentStatus(agent, 'dreht eine Runde', STATUS_COLORS.break);
       const idleDuration = 4000 + Math.random() * 8000;
       setTimeout(() => {
         if (agent.state !== 'on_break') return;
@@ -597,6 +625,37 @@ export class AgentManager {
     return label;
   }
 
+  _createStatusLabel(x, y, text, color) {
+    const label = this.scene.add.text(x, y - 18, text, {
+      fontSize: '8px', fontFamily: 'monospace',
+      color: color, backgroundColor: '#00000099',
+      padding: { x: 3, y: 1 },
+    });
+    label.setOrigin(0.5, 1);
+    label.setDepth(19);
+    return label;
+  }
+
+  _setAgentStatus(agent, text, color) {
+    agent.statusText = text;
+    if (agent.statusLabel) {
+      agent.statusLabel.setText(text);
+      agent.statusLabel.setColor(color);
+    }
+    if (agent.indicator) {
+      const fill = Number.parseInt(String(color).replace('#', '0x'), 16);
+      if (!Number.isNaN(fill)) {
+        agent.indicator.setFillStyle(fill, 0.95);
+      }
+    }
+  }
+
+  _formatToolLabel(toolName) {
+    const raw = String(toolName || '').replace(/^mcp_/, '').replace(/_/g, ' ').trim();
+    if (!raw) return 'arbeitet';
+    return raw.length > 20 ? raw.slice(0, 20) + '…' : raw;
+  }
+
   _findEntrance() {
     return findEntrance(this.tm.collisionGrid);
   }
@@ -641,7 +700,9 @@ export class AgentManager {
 
   updateAgentStatus(agentId, text) {
     const agent = this.agents.get(agentId);
-    if (agent) agent.task = text;
+    if (!agent) return;
+    agent.task = text;
+    this._setAgentStatus(agent, text, agent.isNPC ? STATUS_COLORS.npc : STATUS_COLORS.progress);
   }
 
   /* ── CrewAI EventBus Handlers ── */
@@ -652,7 +713,7 @@ export class AgentManager {
     this.spawnAgent(crewId, agentType, task);
   }
 
-  onToolUse(agentName, toolName, animation, crewId) {
+  onToolUse(agentName, toolName, animation, crewId, statusLabel = '') {
     const agent = this.agents.get(crewId);
     if (!agent || agent.state === 'leaving') return;
 
@@ -682,6 +743,11 @@ export class AgentManager {
     }
 
     agent.task = toolName || '';
+    this._setAgentStatus(
+      agent,
+      statusLabel || this._formatToolLabel(toolName),
+      STATUS_COLORS.progress,
+    );
   }
 
   onAgentDone(crewType, crewId) {
@@ -690,6 +756,7 @@ export class AgentManager {
 
     // Play idle animation to signal completion, then remove after 5s
     agent.sprite.anims.play(`${agent.spriteName}_idle_down`, true);
+    this._setAgentStatus(agent, 'fertig', STATUS_COLORS.done);
     setTimeout(() => this.removeAgent(crewId), 5000);
   }
 
@@ -699,6 +766,7 @@ export class AgentManager {
 
     // Keep current position; error bubble is shown via BubbleManager in ws.js
     // Remove after 8s to give the user time to read the bubble
+    this._setAgentStatus(agent, 'fehler', STATUS_COLORS.error);
     setTimeout(() => this.removeAgent(crewId), 8000);
   }
 }

@@ -84,6 +84,9 @@ class BaseFalkensteinCrew(ABC):
         self.event_bus = event_bus
         self.chat_id = chat_id
         self.vault_context = vault_context
+        self._main_loop: asyncio.AbstractEventLoop | None = None
+        self._crew_id: str | None = None
+        self.job_id: str | None = None
 
         self.agent_configs = load_agent_configs()
         self.task_configs = load_task_configs()
@@ -112,8 +115,8 @@ class BaseFalkensteinCrew(ABC):
         """CrewAI step callback — bridges sync callback to async EventBus.
 
         CrewAI calls this synchronously after each agent step. We schedule the
-        async ``on_tool_call`` coroutine onto the running event loop without
-        blocking the calling thread.
+        async ``on_tool_call`` coroutine onto the app's main event loop even
+        when CrewAI invokes the callback from a worker thread.
         """
         try:
             # Extract tool info when available; fall back to generic values.
@@ -121,28 +124,38 @@ class BaseFalkensteinCrew(ABC):
             tool_name: str = getattr(step_output, "tool", "unknown")
             tool_input: Any = getattr(step_output, "tool_input", None)
             tool_output: Any = getattr(step_output, "result", str(step_output))
+            coro = self.event_bus.on_tool_call(
+                agent_name=str(agent_name),
+                tool_name=str(tool_name),
+                tool_input=tool_input,
+                tool_output=tool_output,
+                crew_id=self._crew_id,
+                chat_id=self.chat_id,
+                job_id=self.job_id,
+            )
 
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                asyncio.ensure_future(
-                    self.event_bus.on_tool_call(
-                        agent_name=str(agent_name),
-                        tool_name=str(tool_name),
-                        tool_input=tool_input,
-                        tool_output=tool_output,
-                    )
-                )
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+
+            if loop is not None and loop.is_running():
+                loop.create_task(coro)
+            elif self._main_loop is not None and self._main_loop.is_running():
+                future = asyncio.run_coroutine_threadsafe(coro, self._main_loop)
+                future.add_done_callback(self._log_tool_callback_result)
             else:
-                loop.run_until_complete(
-                    self.event_bus.on_tool_call(
-                        agent_name=str(agent_name),
-                        tool_name=str(tool_name),
-                        tool_input=tool_input,
-                        tool_output=tool_output,
-                    )
-                )
+                asyncio.run(coro)
         except Exception as exc:  # never crash the crew over a callback error
             logger.warning("_step_callback error: %s", exc)
+
+    @staticmethod
+    def _log_tool_callback_result(future) -> None:
+        """Drain thread-safe callback futures so async errors are not lost."""
+        try:
+            future.result()
+        except Exception as exc:
+            logger.warning("_step_callback async error: %s", exc)
 
     # ── Abstract interface ────────────────────────────────────────────────────
 
@@ -161,10 +174,12 @@ class BaseFalkensteinCrew(ABC):
 
         Returns the final crew result as a string.
         """
-        await self.event_bus.on_crew_start(
+        self._main_loop = asyncio.get_running_loop()
+        self._crew_id = await self.event_bus.on_crew_start(
             crew_name=self.crew_type,
             task_description=self.task_description,
             chat_id=self.chat_id,
+            job_id=self.job_id,
         )
 
         try:
@@ -179,6 +194,8 @@ class BaseFalkensteinCrew(ABC):
                 crew_name=self.crew_type,
                 result=result_str,
                 chat_id=self.chat_id,
+                crew_id=self._crew_id,
+                job_id=self.job_id,
             )
             return result_str
         except Exception as exc:
@@ -187,5 +204,7 @@ class BaseFalkensteinCrew(ABC):
                 crew_name=self.crew_type,
                 error=exc,
                 chat_id=self.chat_id,
+                crew_id=self._crew_id,
+                job_id=self.job_id,
             )
             raise

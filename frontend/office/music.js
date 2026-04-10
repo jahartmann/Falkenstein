@@ -1,7 +1,7 @@
 /**
- * MusicPlayer — HTML5 Audio + Web Audio API fallback + Apple Music via MCP
+ * MusicPlayer — local HTML5 audio + Web Audio fallback + Apple Music via MCP
  * Genres: lofi, jazz, ambient, classical + apple_* variants
- * Falls back to procedurally generated ambient pad when no .mp3 files are present
+ * Falls back to a generated ambient pad when local audio is unavailable
  */
 class MusicPlayer {
   constructor() {
@@ -17,10 +17,11 @@ class MusicPlayer {
     this._classicalSwellTimer = null;
 
     this.genres = {
-      lofi:      { label: 'Lofi Beats',      tracks: ['/static/music/lofi_1.mp3', '/static/music/lofi_2.mp3'] },
-      jazz:      { label: 'Jazz Vibes',       tracks: ['/static/music/jazz_1.mp3', '/static/music/jazz_2.mp3'] },
-      ambient:   { label: 'Ambient Waves',    tracks: ['/static/music/ambient_1.mp3', '/static/music/ambient_2.mp3'] },
-      classical: { label: 'Classical Piano',  tracks: ['/static/music/classical_1.mp3', '/static/music/classical_2.mp3'] },
+      lofi:      { label: 'Lofi Beats',      tracks: ['/static/music/lofi_loop.wav'] },
+      jazz:      { label: 'Jazz Vibes',       tracks: ['/static/music/jazz_loop.wav'] },
+      ambient:   { label: 'Ambient Waves',    tracks: ['/static/music/ambient_loop.wav'] },
+      classical: { label: 'Classical Piano',  tracks: ['/static/music/classical_loop.wav'] },
+      custom:    { label: 'Eigene Musik',     tracks: [] },
       apple_lofi:      { label: 'Apple Lofi',      tracks: [] },
       apple_jazz:      { label: 'Apple Jazz',       tracks: [] },
       apple_ambient:   { label: 'Apple Ambient',    tracks: [] },
@@ -50,6 +51,10 @@ class MusicPlayer {
   }
 
   _currentTracks() {
+    if (this.genre === 'custom') {
+      const customUrl = (localStorage.getItem('music_custom_url') || '').trim();
+      return customUrl ? [customUrl] : [];
+    }
     return this.genres[this.genre]?.tracks || [];
   }
 
@@ -60,11 +65,65 @@ class MusicPlayer {
       ? ` ${this.currentIndex + 1}/${tracks.length}` : '';
     const el = document.getElementById('music-title');
     if (el) el.textContent = genreLabel + trackNum;
+    this._updateSubtitle();
+    this._updateBadge();
   }
 
   _updateToggleBtn(playing) {
     const btn = document.getElementById('music-toggle');
     if (btn) btn.textContent = playing ? '⏸' : '▶';
+  }
+
+  _updateSubtitle(text = '') {
+    const el = document.getElementById('music-subtitle');
+    if (!el) return;
+    if (text) {
+      el.textContent = text;
+      return;
+    }
+    if (this._isAppleGenre()) {
+      el.textContent = 'Apple Music Anfrage';
+      return;
+    }
+    if (this.genre === 'custom') {
+      const customUrl = (localStorage.getItem('music_custom_url') || '').trim();
+      if (!customUrl) {
+        el.textContent = 'Eigene Quelle fehlt noch';
+        return;
+      }
+      try {
+        el.textContent = new URL(customUrl).host || 'Eigene Audio-Quelle';
+      } catch (_) {
+        el.textContent = 'Eigene Audio-Quelle';
+      }
+      return;
+    }
+    el.textContent = 'Lokale Loop';
+  }
+
+  _updateBadge(text = '') {
+    const el = document.getElementById('music-badge');
+    if (!el) return;
+    if (text) {
+      el.textContent = text;
+      return;
+    }
+    if (this._isAppleGenre()) {
+      el.textContent = 'apple';
+    } else if (this.genre === 'custom') {
+      el.textContent = 'custom';
+    } else {
+      el.textContent = 'lokal';
+    }
+  }
+
+  _syncCustomUrlUI() {
+    const row = document.getElementById('music-custom-row');
+    const input = document.getElementById('music-custom-url');
+    if (!row || !input) return;
+    const isCustom = this.genre === 'custom';
+    row.classList.toggle('hidden', !isCustom);
+    input.value = (localStorage.getItem('music_custom_url') || '').trim();
   }
 
   _setPulse(active) {
@@ -92,13 +151,17 @@ class MusicPlayer {
     this.audio.loop = false;
     this.audio.addEventListener('ended', () => this._nextTrack());
     this.audio.addEventListener('error', () => {
-      // mp3 not available — fall back to generated pad
+      // Local audio not available — fall back to generated pad
       console.info(`MusicPlayer: ${url} not found, using generated pad`);
       this._stopAudio();
+      this._updateSubtitle('Generator-Fallback aktiv');
+      this._updateBadge('fallback');
       this._startGeneratedPad();
     });
     this.audio.play().catch(() => {
       this._stopAudio();
+      this._updateSubtitle('Generator-Fallback aktiv');
+      this._updateBadge('fallback');
       this._startGeneratedPad();
     });
   }
@@ -128,6 +191,8 @@ class MusicPlayer {
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const el = document.getElementById('music-title');
       if (el) el.textContent = `Apple Music: ${genre.replace('apple_', '')}`;
+      this._updateSubtitle('Streaming via MCP');
+      this._updateBadge('apple');
       this.isPlaying = true;
       this._updateToggleBtn(true);
       this._setPulse(true);
@@ -142,6 +207,8 @@ class MusicPlayer {
       this.genre = savedGenre;
       const el = document.getElementById('music-title');
       if (el) el.textContent = `Fallback: ${fallback}`;
+      this._updateSubtitle('Lokaler Synth aktiv');
+      this._updateBadge('fallback');
     }
   }
 
@@ -336,12 +403,15 @@ class MusicPlayer {
     const tracks = this._currentTracks();
     if (tracks.length > 0) {
       this._playTrack(tracks[this.currentIndex]);
+      this._updateTitle();
     } else {
       this._startGeneratedPad();
+      this._updateTitle();
+      this._updateSubtitle(this.genre === 'custom' ? 'Keine URL gesetzt, Synth aktiv' : 'Lokaler Synth aktiv');
+      this._updateBadge(this.genre === 'custom' ? 'custom' : 'fallback');
     }
     this.isPlaying = true;
     this._updateToggleBtn(true);
-    this._updateTitle();
     this._setPulse(true);
   }
 
@@ -351,6 +421,7 @@ class MusicPlayer {
     this.isPlaying = false;
     this._updateToggleBtn(false);
     this._setPulse(false);
+    this._updateTitle();
   }
 
   /* ── Public API ── */
@@ -389,8 +460,38 @@ class MusicPlayer {
     this.genre = g;
     this.currentIndex = 0;
     localStorage.setItem('music_genre', g);
+    this._syncCustomUrlUI();
     if (wasPlaying) this._startPlayback();
     else this._updateTitle();
+  }
+
+  saveCustomUrl() {
+    const input = document.getElementById('music-custom-url');
+    if (!input) return;
+    const customUrl = input.value.trim();
+    if (!customUrl) {
+      localStorage.removeItem('music_custom_url');
+    } else {
+      localStorage.setItem('music_custom_url', customUrl);
+    }
+    if (this.genre === 'custom') {
+      const wasPlaying = this.isPlaying;
+      this._stopPlayback();
+      if (wasPlaying) this._startPlayback();
+      else this._updateTitle();
+    }
+  }
+
+  clearCustomUrl() {
+    localStorage.removeItem('music_custom_url');
+    const input = document.getElementById('music-custom-url');
+    if (input) input.value = '';
+    if (this.genre === 'custom') {
+      const wasPlaying = this.isPlaying;
+      this._stopPlayback();
+      if (wasPlaying) this._startPlayback();
+      else this._updateTitle();
+    }
   }
 
   /* ── Init: restore persisted state and sync UI ── */
@@ -401,6 +502,17 @@ class MusicPlayer {
     const genreSelect = document.getElementById('music-genre');
     if (genreSelect && this.genres[this.genre]) genreSelect.value = this.genre;
 
+    const customInput = document.getElementById('music-custom-url');
+    if (customInput) {
+      customInput.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          this.saveCustomUrl();
+        }
+      });
+    }
+
+    this._syncCustomUrlUI();
     this._updateTitle();
   }
 }

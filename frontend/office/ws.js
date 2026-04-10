@@ -79,14 +79,17 @@ export class OfficeWS {
       case 'tool_use': {
         const toolName = msg.tool || msg.tool_name || '';
         let bubbleText = msg.tool_name || msg.label || toolName;
+        const agentId = msg.crew_id || msg.agent_id;
         if (bubbleText.startsWith('mcp_')) {
           const icons = { reminder: '⏰', calendar: '📅', music: '🎵', homekit: '💡', note: '📝', shell: '💻' };
           for (const [key, icon] of Object.entries(icons)) {
             if (bubbleText.includes(key)) { bubbleText = `${icon} ${bubbleText.split('_').pop()}`; break; }
           }
         }
-        this.am.onToolUse(msg.agent, toolName, msg.animation, msg.crew_id);
-        addFeedEntry('🔧', toolName || bubbleText);
+        this.am.onToolUse(msg.agent, toolName, msg.animation, agentId, msg.label || bubbleText);
+        if (agentId) this.am.updateAgentStatus(agentId, msg.label || bubbleText);
+        if (agentId) this.bm.showBubble(agentId, msg.label || bubbleText);
+        addFeedEntry('🔧', msg.step ? `${toolName} · Schritt ${msg.step}` : (toolName || bubbleText));
         break;
       }
 
@@ -119,8 +122,8 @@ export class OfficeWS {
       }
 
       case 'agent_progress':
-        this.am.updateAgentStatus(msg.agent_id, msg.label || msg.tool || '');
-        this.bm.showBubble(msg.agent_id, msg.label || `\uD83D\uDD27 ${msg.tool || '...'}`);
+        this.am.updateAgentStatus(msg.agent_id || msg.crew_id, msg.label || msg.tool || '');
+        this.bm.showBubble(msg.agent_id || msg.crew_id, msg.label || `\uD83D\uDD27 ${msg.tool || '...'}`);
         addFeedEntry('📊', msg.label || msg.tool_name || 'Progress');
         break;
 

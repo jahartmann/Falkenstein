@@ -1,34 +1,21 @@
-"""Converts MCP tool schemas into CrewAI BaseTool instances.
-
-Dynamically generates _run() methods with typed parameter signatures
-from MCP input_schema, so CrewAI auto-generates the correct args_schema.
-"""
+"""Converts MCP tool schemas into CrewAI BaseTool instances."""
 from __future__ import annotations
 import logging
 from typing import Any
 from crewai.tools import BaseTool
+from pydantic import BaseModel, create_model
 from backend.mcp.config import ToolSchema
 
 log = logging.getLogger(__name__)
 
-# JSON Schema type → Python type name for code generation
-_TYPE_MAP = {
-    "string": "str",
-    "integer": "int",
-    "number": "float",
-    "boolean": "bool",
-    "array": "list",
-    "object": "dict",
-}
-
-# Default values per type for optional params
-_DEFAULT_MAP = {
-    "string": '""',
-    "integer": "0",
-    "number": "0.0",
-    "boolean": "False",
-    "array": "[]",
-    "object": "{}",
+# JSON Schema type → actual Python type for args_schema generation
+_PY_TYPE_MAP = {
+    "string": str,
+    "integer": int,
+    "number": float,
+    "boolean": bool,
+    "array": list,
+    "object": dict,
 }
 
 
@@ -42,26 +29,17 @@ def _make_tool_class(schema: ToolSchema, bridge: Any) -> type[BaseTool]:
     required = set(schema.input_schema.get("required", []))
 
     if props:
-        # Build _run signature: required params first, then optional
-        req_params = []
-        opt_params = []
+        args_schema_fields: dict[str, tuple[Any, Any]] = {}
         for pname, pdef in props.items():
-            py_type = _TYPE_MAP.get(pdef.get("type", "string"), "str")
-            default = _DEFAULT_MAP.get(pdef.get("type", "string"), '""')
+            json_type = pdef.get("type", "string")
+            py_runtime_type = _PY_TYPE_MAP.get(json_type, str)
             if pname in required:
-                req_params.append(f"{pname}: {py_type}")
+                args_schema_fields[pname] = (py_runtime_type, ...)
             else:
-                opt_params.append(f"{pname}: {py_type} = {default}")
-
-        params = ", ".join(["self"] + req_params + opt_params)
-        # Collect all param names for forwarding
-        all_names = list(props.keys())
-        kwargs_dict = "{" + ", ".join(f'"{n}": {n}' for n in all_names) + "}"
-
-        run_body = f"return _call({kwargs_dict})"
+                args_schema_fields[pname] = (py_runtime_type | None, None)
+        args_schema = create_model(f"{tool_name.title().replace('_', '')}Args", **args_schema_fields)
     else:
-        params = "self, **kwargs"
-        run_body = "return _call(kwargs)"
+        args_schema = None
 
     def _call(kwargs: dict) -> str:
         result = bridge.call_tool_threadsafe(server_id, mcp_tool_name, kwargs)
@@ -69,17 +47,26 @@ def _make_tool_class(schema: ToolSchema, bridge: Any) -> type[BaseTool]:
             return result.output
         return f"Error: {result.output}"
 
-    # Build the whole class via exec so _run is in the class body (satisfies ABC)
-    local_ns: dict[str, Any] = {"BaseTool": BaseTool, "_call": _call}
-    class_code = "\n".join([
-        "class MCPDynamicTool(BaseTool):",
-        f"    name: str = {tool_name!r}",
-        f"    description: str = {tool_desc!r}",
-        f"    def _run({params}) -> str:",
-        f"        {run_body}",
-    ])
-    exec(class_code, local_ns)  # noqa: S102
-    return local_ns["MCPDynamicTool"]
+    def _run(self, **kwargs: Any) -> str:
+        return _call({k: v for k, v in kwargs.items() if v is not None})
+
+    annotations: dict[str, Any] = {
+        "name": str,
+        "description": str,
+    }
+    attrs: dict[str, Any] = {
+        "__module__": __name__,
+        "__annotations__": annotations,
+        "name": tool_name,
+        "description": tool_desc,
+        "_run": _run,
+    }
+
+    if args_schema is not None:
+        annotations["args_schema"] = type[BaseModel]
+        attrs["args_schema"] = args_schema
+
+    return type("MCPDynamicTool", (BaseTool,), attrs)
 
 
 def create_mcp_tool(schema: ToolSchema, bridge: Any) -> BaseTool:

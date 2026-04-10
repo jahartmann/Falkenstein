@@ -104,6 +104,28 @@ async def test_on_tool_call_does_not_stream_for_file_read(bus, mocks):
     telegram_bot.send_message.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+async def test_on_tool_call_includes_job_progress_when_job_id_present(mocks):
+    ws_manager, telegram_bot, db = mocks
+
+    class FakeJobs:
+        def note_progress(self, job_id, label):
+            assert job_id == "TG-0001"
+            assert label == "system_shell"
+            return {"job_id": job_id, "step": 2, "label": label, "crew_id": "crew-123", "crew_type": "ops"}
+
+    bus = FalkensteinEventBus(ws_manager, telegram_bot, db, telegram_jobs=FakeJobs())
+    await bus.on_tool_call(
+        "agent1", "system_shell", {"command": "date"}, "2026-04-10", 50,
+        crew_id="crew-123", chat_id=7, job_id="TG-0001",
+    )
+
+    telegram_bot.send_message.assert_awaited_once()
+    args, _ = telegram_bot.send_message.call_args
+    assert "TG-0001" in args[0]
+    assert "Schritt 2" in args[0]
+
+
 # ---------------------------------------------------------------------------
 # on_crew_done
 # ---------------------------------------------------------------------------

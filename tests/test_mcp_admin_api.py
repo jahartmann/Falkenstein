@@ -75,6 +75,7 @@ def admin_app_client(tmp_path):
     from backend.admin_api import router as admin_router
     from backend import admin_api as mod
     from backend.database import Database
+    from backend.config_service import ConfigService
     from backend.mcp.registry import MCPRegistry
     from backend.mcp.permissions import PermissionResolver
     import asyncio
@@ -87,6 +88,10 @@ def admin_app_client(tmp_path):
     loop = asyncio.new_event_loop()
     db = Database(tmp_path / "t.db")
     loop.run_until_complete(db.init())
+    config_service = ConfigService(db)
+    loop.run_until_complete(config_service.init())
+    loop.run_until_complete(config_service.set("obsidian_vault_path", str(tmp_path / "Vault")))
+    loop.run_until_complete(config_service.set("workspace_path", str(tmp_path / "workspace")))
     reg = MCPRegistry()
     loop.run_until_complete(reg.load_from_db(db))
     resolver = PermissionResolver(db)
@@ -98,7 +103,7 @@ def admin_app_client(tmp_path):
         async def discover_tools(self): return []
 
     mod.set_dependencies(
-        db=db, scheduler=None, config_service=None, flow=None,
+        db=db, scheduler=None, config_service=config_service, flow=None,
         fact_memory=None, soul_memory=None, system_monitor=None,
         mcp_bridge=FakeBridge(),
         permission_resolver=resolver, approval_store=None,
@@ -119,6 +124,7 @@ def test_api_catalog_returns_entries(admin_app_client):
         assert "risk_level" in entry
         assert "installed" in entry
         assert "enabled" in entry
+        assert "preflight" in entry
 
 
 def test_api_servers_returns_installed_only(admin_app_client):
@@ -149,6 +155,7 @@ def test_api_permissions_empty(admin_app_client):
 
 def test_api_install_triggers_installer(admin_app_client, tmp_path, monkeypatch):
     from backend.mcp import installer as inst
+    from backend import admin_api as mod
     calls = []
     async def fake_install(sid, pkg, bin_name):
         calls.append((sid, pkg, bin_name))
@@ -161,6 +168,57 @@ def test_api_install_triggers_installer(admin_app_client, tmp_path, monkeypatch)
     assert r.status_code == 200
     assert r.json()["status"] == "ok"
     assert calls == [("apple-mcp", "apple-mcp", "apple-mcp")]
+    assert mod._mcp_bridge.registry.get_user_config("apple-mcp") == {}
+
+
+def test_api_install_backfills_obsidian_vault_path(admin_app_client, tmp_path, monkeypatch):
+    from backend.mcp import installer as inst
+    from backend import admin_api as mod
+
+    async def fake_install(sid, pkg, bin_name):
+        from backend.mcp.installer import InstallResult
+        return InstallResult(success=True, binary_path=tmp_path / "bin",
+                             error=None, stderr="")
+
+    monkeypatch.setattr(inst, "install", fake_install)
+    r = admin_app_client.post("/api/mcp/servers/mcp-obsidian/install", json={"config": {}})
+    assert r.status_code == 200
+    assert r.json()["status"] == "ok"
+    assert mod._mcp_bridge.registry.get_user_config("mcp-obsidian")["vault_path"].endswith("/Vault")
+
+
+def test_api_enable_reports_preflight_error_for_invalid_obsidian_path(admin_app_client, tmp_path, monkeypatch):
+    from backend.mcp import installer as inst
+    from backend import admin_api as mod
+
+    async def fake_install(sid, pkg, bin_name):
+        from backend.mcp.installer import InstallResult
+        return InstallResult(success=True, binary_path=tmp_path / "bin",
+                             error=None, stderr="")
+
+    monkeypatch.setattr(inst, "install", fake_install)
+    monkeypatch.setattr(mod._installer, "resolve_binary", lambda sid, bin_name: tmp_path / "bin")
+
+    original_get = mod._config_service.get
+    missing_vault = str(tmp_path / "MissingVault")
+
+    def fake_get(key, default=""):
+        if key == "obsidian_vault_path":
+            return missing_vault
+        return original_get(key, default)
+
+    monkeypatch.setattr(mod._config_service, "get", fake_get)
+
+    install_resp = admin_app_client.post("/api/mcp/servers/mcp-obsidian/install", json={"config": {}})
+    assert install_resp.status_code == 200
+    assert install_resp.json()["status"] == "ok"
+
+    enable_resp = admin_app_client.post("/api/mcp/servers/mcp-obsidian/enable")
+    assert enable_resp.status_code == 200
+    data = enable_resp.json()
+    assert data["status"] == "error"
+    assert data["preflight"]["ok"] is False
+    assert any(issue["code"] == "path_missing" for issue in data["preflight"]["issues"])
 
 
 def test_api_enable_sets_flag(admin_app_client):

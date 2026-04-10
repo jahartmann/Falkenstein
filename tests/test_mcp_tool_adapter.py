@@ -59,6 +59,17 @@ def test_create_mcp_tool_has_args_schema():
     assert fields["title"].is_required()
     assert not fields["due_date"].is_required()
 
+def test_create_mcp_tool_omits_missing_optional_args():
+    """Optional MCP fields should stay optional in the generated args schema and payload."""
+    bridge = MagicMock()
+    bridge.call_tool_threadsafe = MagicMock(return_value=ToolResult(success=True, output="ok"))
+    tool = create_mcp_tool(_sample_schema(), bridge)
+    result = tool._run(title="Meeting")
+    assert result == "ok"
+    bridge.call_tool_threadsafe.assert_called_once_with(
+        "apple-mcp", "create_reminder", {"title": "Meeting"},
+    )
+
 def test_create_mcp_tool_no_schema_for_empty_properties():
     """Tools without properties should still work (no args_schema override)."""
     bridge = MagicMock()

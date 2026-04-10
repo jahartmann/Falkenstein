@@ -13,11 +13,27 @@
   <div class="hud-bar">
     <span class="hud-title">Falkenstein Büro</span>
     <span class="hud-label">Agents</span><span class="hud-value" id="hud-agents">0</span>
+    <span class="hud-label">Arbeitet</span><span class="hud-value hud-value-working" id="hud-working">0</span>
+    <span class="hud-label">Pause</span><span class="hud-value hud-value-break" id="hud-break">0</span>
     <span class="hud-label">Tasks</span><span class="hud-value" id="hud-tasks">0</span>
     <span class="hud-label">Schedules</span><span class="hud-value" id="hud-schedules">0</span>
     <span class="hud-spacer"></span>
     <span class="hud-label">Zoom</span><span class="hud-value" id="hud-zoom">1.0x</span>
     <span class="hud-dot" id="hud-ws" title="WebSocket"></span>
+  </div>
+
+  <div class="office-guide">
+    <div class="guide-title">Büro-Guide</div>
+    <div class="guide-row"><span class="guide-kbd">WASD</span><span>Bewegen</span></div>
+    <div class="guide-row"><span class="guide-kbd">E</span><span>Objekt oder Monitor öffnen</span></div>
+    <div class="guide-row"><span class="guide-kbd">Klick</span><span>Minimap springt zur Position</span></div>
+    <div class="guide-row"><span class="guide-kbd">ESC</span><span>Panel schließen</span></div>
+    <div class="guide-legend">
+      <span class="status-pill working">arbeitet</span>
+      <span class="status-pill progress">live</span>
+      <span class="status-pill break">pause</span>
+      <span class="status-pill error">fehler</span>
+    </div>
   </div>
 
   <!-- Minimap -->
@@ -35,25 +51,48 @@
 
   <!-- Music Player -->
   <div id="music-player" class="music-player">
-    <div class="music-info"><span class="music-icon">🎵</span><span id="music-title">Lofi Beats</span></div>
-    <div class="music-controls">
-      <button onclick="musicPlayer.prev()">⏮</button>
-      <button id="music-toggle" onclick="musicPlayer.toggle()">▶</button>
-      <button onclick="musicPlayer.next()">⏭</button>
+    <div class="music-header">
+      <div class="music-info">
+        <span class="music-icon">🎵</span>
+        <div class="music-copy">
+          <span id="music-title">Lofi Beats</span>
+          <span id="music-subtitle" class="music-subtitle">Lokale Loop</span>
+        </div>
+      </div>
+      <span id="music-badge" class="music-badge">lokal</span>
     </div>
-    <input type="range" id="music-volume" class="music-volume" min="0" max="100" value="30" oninput="musicPlayer.setVolume(this.value/100)">
-    <select id="music-genre" onchange="musicPlayer.setGenre(this.value)">
-      <option value="lofi">Lofi</option>
-      <option value="jazz">Jazz</option>
-      <option value="ambient">Ambient</option>
-      <option value="classical">Classical</option>
-      <optgroup label="Apple Music">
-        <option value="apple_lofi">Apple Lofi</option>
-        <option value="apple_jazz">Apple Jazz</option>
-        <option value="apple_ambient">Apple Ambient</option>
-        <option value="apple_classical">Apple Classical</option>
-      </optgroup>
-    </select>
+    <div class="music-main-row">
+      <div class="music-controls">
+        <button onclick="musicPlayer.prev()">⏮</button>
+        <button id="music-toggle" onclick="musicPlayer.toggle()">▶</button>
+        <button onclick="musicPlayer.next()">⏭</button>
+      </div>
+      <input type="range" id="music-volume" class="music-volume" min="0" max="100" value="30" oninput="musicPlayer.setVolume(this.value/100)">
+      <select id="music-genre" onchange="musicPlayer.setGenre(this.value)">
+        <option value="lofi">Lofi</option>
+        <option value="jazz">Jazz</option>
+        <option value="ambient">Ambient</option>
+        <option value="classical">Classical</option>
+        <option value="custom">Eigene Audio-URL</option>
+        <optgroup label="Apple Music">
+          <option value="apple_lofi">Apple Lofi</option>
+          <option value="apple_jazz">Apple Jazz</option>
+          <option value="apple_ambient">Apple Ambient</option>
+          <option value="apple_classical">Apple Classical</option>
+        </optgroup>
+      </select>
+    </div>
+    <div id="music-custom-row" class="music-custom-row hidden">
+      <input
+        id="music-custom-url"
+        class="music-custom-url"
+        type="url"
+        placeholder="https://.../stream.mp3"
+        autocomplete="off"
+      >
+      <button class="music-secondary-btn" onclick="musicPlayer.saveCustomUrl()">Speichern</button>
+      <button class="music-secondary-btn" onclick="musicPlayer.clearCustomUrl()">Leeren</button>
+    </div>
   </div>
 
   <!-- Activity Feed -->

@@ -3,18 +3,14 @@ from __future__ import annotations
 import datetime
 from pathlib import Path
 from backend.tools.base import Tool, ToolResult
+from backend.obsidian_paths import resolve_falkenstein_root
 
 
-# Parent folder inside the vault for all Falkenstein content
-VAULT_PREFIX = "KI-Büro"
-
-# Vault structure that gets created on first use
+# Falkenstein structure created on first use
 VAULT_STRUCTURE = {
-    VAULT_PREFIX: {
-        "Wissen": {},
-        "Projekte": {},
-        "Reports": {},
-    },
+    "Wissen": {},
+    "Projekte": {},
+    "Reports": {},
 }
 
 
@@ -29,12 +25,14 @@ class ObsidianManagerTool(Tool):
 
     def __init__(self, vault_path: Path):
         self.vault = vault_path.resolve()
+        self.base_dir = resolve_falkenstein_root(self.vault)
         self._ensure_vault_structure()
 
     def _ensure_vault_structure(self):
         """Create vault folder structure if it doesn't exist."""
         self.vault.mkdir(parents=True, exist_ok=True)
-        self._create_structure(self.vault, VAULT_STRUCTURE)
+        self.base_dir.mkdir(parents=True, exist_ok=True)
+        self._create_structure(self.base_dir, VAULT_STRUCTURE)
 
     def _create_structure(self, base: Path, structure: dict):
         for name, content in structure.items():
@@ -130,7 +128,7 @@ class ObsidianManagerTool(Tool):
         if not content:
             return ToolResult(success=False, output="Parameter 'content' fehlt.")
         today = datetime.date.today().isoformat()
-        report_dir = self.vault / VAULT_PREFIX / "Reports"
+        report_dir = self.base_dir / "Reports"
         report_dir.mkdir(parents=True, exist_ok=True)
         report_path = report_dir / f"{today}.md"
         header = f"# Daily Report — {today}\n\n"
@@ -148,7 +146,7 @@ class ObsidianManagerTool(Tool):
         """Create a new project folder with README."""
         if not name:
             return ToolResult(success=False, output="Projektname fehlt.")
-        project_dir = self.vault / VAULT_PREFIX / "Projekte" / name
+        project_dir = self.base_dir / "Projekte" / name
         if project_dir.exists():
             return ToolResult(success=True, output=f"Projekt '{name}' existiert bereits.")
         try:
@@ -173,11 +171,12 @@ class ObsidianManagerTool(Tool):
         today = datetime.date.today().isoformat()
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
         slug = task_title.lower().replace(" ", "-")[:40]
+        root_name = self.base_dir.name
 
         if project:
-            path_str = f"{VAULT_PREFIX}/Projekte/{project}/{today}-{slug}.md"
+            path_str = f"{root_name}/Projekte/{project}/{today}-{slug}.md"
         else:
-            path_str = f"{VAULT_PREFIX}/Wissen/{today}-{slug}.md"
+            path_str = f"{root_name}/Wissen/{today}-{slug}.md"
 
         content = f"# {task_title}\n\n*{agent_name}* — {timestamp}\n\n{result}"
         return await self._write(path_str, content)

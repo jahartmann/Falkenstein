@@ -1,5 +1,7 @@
 """Tests for YAML config loaders and BaseFalkensteinCrew."""
-from unittest.mock import MagicMock
+import asyncio
+import concurrent.futures
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -137,3 +139,28 @@ def test_base_crew_vault_context_stored():
 
     crew = ConcreteCrew("writer", "Write guide", MagicMock(), "1", vault_context="Vault rules")
     assert crew.vault_context == "Vault rules"
+
+
+@pytest.mark.asyncio
+async def test_step_callback_from_worker_thread_uses_main_loop():
+    event_bus = MagicMock()
+    event_bus.on_tool_call = AsyncMock(return_value=None)
+    crew = _StubCrew("ops", "Run task", event_bus, "1")
+    crew._main_loop = asyncio.get_running_loop()
+
+    step = type(
+        "StepOutput",
+        (),
+        {"agent": "DevOps Engineer", "tool": "system_shell", "tool_input": {"command": "date"}, "result": "ok"},
+    )()
+
+    loop = asyncio.get_running_loop()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        await loop.run_in_executor(pool, lambda: crew._step_callback(step))
+
+    for _ in range(20):
+        if event_bus.on_tool_call.await_count == 1:
+            break
+        await asyncio.sleep(0.01)
+
+    event_bus.on_tool_call.assert_awaited_once()

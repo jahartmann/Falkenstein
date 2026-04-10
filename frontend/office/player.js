@@ -1,4 +1,5 @@
 const SPEED = 160;
+const PLAYER_SPRITE = 'Adam';
 
 export class PlayerEntity {
   constructor(scene, tilemapManager) {
@@ -14,7 +15,7 @@ export class PlayerEntity {
   create(startTileX, startTileY) {
     const pos = this.tm.tileToWorld(startTileX, startTileY);
 
-    this.sprite = this.scene.physics.add.sprite(pos.x, pos.y, 'char_0', 0);
+    this.sprite = this.scene.physics.add.sprite(pos.x, pos.y, `${PLAYER_SPRITE}_idle_anim`, 0);
     this.sprite.setScale(3);
     this.sprite.setDepth(10);
     this.sprite.setOrigin(0.5, 0.75);
@@ -45,32 +46,25 @@ export class PlayerEntity {
 
   _createAnimations() {
     const anims = this.scene.anims;
-    // pixel-agents layout: row 0=down, row 1=up, row 2=right (left = flipped right)
-    const directions = [
-      { name: 'down', row: 0 },
-      { name: 'up', row: 1 },
-      { name: 'right', row: 2 },
-      { name: 'left', row: 2 },  // same frames as right, flipped at runtime
-    ];
+    const directions = ['down', 'left', 'right', 'up'];
 
-    for (const dir of directions) {
-      const start = dir.row * 7;
-      if (!anims.exists(`player_walk_${dir.name}`)) {
+    for (let index = 0; index < directions.length; index++) {
+      const dir = directions[index];
+      const start = index * 3;
+      if (!anims.exists(`player_walk_${dir}`)) {
         anims.create({
-          key: `player_walk_${dir.name}`,
-          frames: anims.generateFrameNumbers('char_0', {
-            frames: [start, start + 1, start + 2, start + 1]
-          }),
+          key: `player_walk_${dir}`,
+          frames: anims.generateFrameNumbers(`${PLAYER_SPRITE}_run`, { start, end: start + 2 }),
           frameRate: 8,
           repeat: -1
         });
       }
-      if (!anims.exists(`player_idle_${dir.name}`)) {
+      if (!anims.exists(`player_idle_${dir}`)) {
         anims.create({
-          key: `player_idle_${dir.name}`,
-          frames: [{ key: 'char_0', frame: start }],
-          frameRate: 1,
-          repeat: 0
+          key: `player_idle_${dir}`,
+          frames: anims.generateFrameNumbers(`${PLAYER_SPRITE}_idle_anim`, { start, end: start + 2 }),
+          frameRate: 5,
+          repeat: -1
         });
       }
     }
@@ -96,9 +90,7 @@ export class PlayerEntity {
     }
 
     this.sprite.body.setVelocity(vx, vy);
-
-    // Flip sprite horizontally for left direction
-    this.sprite.flipX = (this.facing === 'left');
+    this.sprite.flipX = false;
 
     if (vx !== 0 || vy !== 0) {
       this.sprite.anims.play(`player_walk_${this.facing}`, true);

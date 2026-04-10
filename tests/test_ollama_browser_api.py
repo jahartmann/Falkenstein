@@ -1,7 +1,7 @@
 # tests/test_ollama_browser_api.py
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
-from httpx import AsyncClient
+from httpx import ASGITransport, AsyncClient
 from fastapi import FastAPI
 from backend.admin_api import router
 
@@ -31,7 +31,7 @@ async def test_ollama_models_endpoint_structure():
         mock_client.get = AsyncMock(return_value=mock_response)
         mock_client_cls.return_value = mock_client
 
-        async with AsyncClient(app=app, base_url="http://test") as ac:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.get("/api/admin/ollama/models")
         # Accept 200 or 500 (Ollama not running in test env)
         assert resp.status_code in (200, 500)
@@ -39,6 +39,6 @@ async def test_ollama_models_endpoint_structure():
 
 @pytest.mark.asyncio
 async def test_ollama_pull_requires_model_name():
-    async with AsyncClient(app=app, base_url="http://test") as ac:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         resp = await ac.post("/api/admin/ollama/pull", json={})
     assert resp.status_code == 422  # Validation error — missing model field

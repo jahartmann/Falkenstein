@@ -3,7 +3,10 @@ from __future__ import annotations
 import asyncio
 import glob as globmod
 import os
+import sys
 import time
+from pathlib import Path
+from unittest.mock import Mock
 
 from fastapi import APIRouter
 from pydantic import BaseModel
@@ -121,6 +124,170 @@ async def _broadcast_mcp_state_changed():
         await ws_mgr.broadcast({"type": "mcp_state_changed"})
     except Exception:
         pass
+
+
+def _normalize_path_list(value) -> list[str]:
+    if isinstance(value, str):
+        return [part.strip() for part in value.split(",") if part.strip()]
+    if isinstance(value, (list, tuple, set)):
+        return [str(part).strip() for part in value if str(part).strip()]
+    return []
+
+
+def _get_config_path_value(key: str) -> str:
+    if _config_service is None:
+        return ""
+    raw = _config_service.get(key, "")
+    return str(Path(raw).expanduser()) if raw else ""
+
+
+def _merge_mcp_server_config(server_id: str, current: dict | None) -> tuple[dict, dict[str, str]]:
+    merged = dict(current or {})
+    sources = {key: "server_config" for key in merged}
+
+    if server_id == "mcp-obsidian" and not merged.get("vault_path"):
+        vault_path = _get_config_path_value("obsidian_vault_path")
+        if vault_path:
+            merged["vault_path"] = vault_path
+            sources["vault_path"] = "global_config"
+
+    if server_id == "filesystem" and not merged.get("allowed_directories"):
+        workspace_path = _get_config_path_value("workspace_path")
+        if workspace_path:
+            merged["allowed_directories"] = [workspace_path]
+            sources["allowed_directories"] = "global_config"
+
+    return merged, sources
+
+
+def _mcp_preflight(server_id: str) -> dict:
+    entry = CATALOG.get(server_id)
+    if entry is None:
+        return {
+            "ok": False,
+            "issues": [{
+                "level": "error",
+                "code": "unknown_server",
+                "message": f"Unbekannter MCP-Server: {server_id}",
+            }],
+            "config": {},
+            "config_source": {},
+            "binary_path": None,
+        }
+
+    reg = getattr(_mcp_bridge, "registry", None)
+    if isinstance(reg, Mock):
+        return {
+            "ok": True,
+            "issues": [],
+            "config": {},
+            "config_source": {},
+            "binary_path": None,
+        }
+    user_cfg = reg.get_user_config(server_id) if reg and hasattr(reg, "get_user_config") else {}
+    merged_cfg, sources = _merge_mcp_server_config(server_id, user_cfg)
+
+    issues: list[dict] = []
+    installed = bool(reg and hasattr(reg, "is_installed") and reg.is_installed(server_id))
+    binary = _installer.resolve_binary(server_id, entry["bin"])
+
+    if entry.get("platform") and sys.platform not in entry["platform"]:
+        issues.append({
+            "level": "error",
+            "code": "unsupported_platform",
+            "message": f"Dieser Server wird auf {sys.platform} nicht unterstützt.",
+        })
+
+    if not installed:
+        issues.append({
+            "level": "error",
+            "code": "not_installed",
+            "message": "Server ist noch nicht installiert.",
+        })
+    elif binary is None:
+        issues.append({
+            "level": "error",
+            "code": "missing_binary",
+            "message": "Installierter Server wurde nicht im MCP-Installationsverzeichnis gefunden.",
+        })
+
+    for key in entry.get("requires_config", []):
+        if key == "allowed_directories":
+            if not _normalize_path_list(merged_cfg.get(key)):
+                issues.append({
+                    "level": "error",
+                    "code": "missing_config",
+                    "field": key,
+                    "message": "Keine freigegebenen Verzeichnisse konfiguriert.",
+                })
+        elif not merged_cfg.get(key):
+            issues.append({
+                "level": "error",
+                "code": "missing_config",
+                "field": key,
+                "message": f"Pflichtkonfiguration fehlt: {key}",
+            })
+
+    if server_id == "mcp-obsidian" and merged_cfg.get("vault_path"):
+        vault_path = Path(str(merged_cfg["vault_path"])).expanduser()
+        if not vault_path.exists():
+            issues.append({
+                "level": "error",
+                "code": "path_missing",
+                "field": "vault_path",
+                "message": f"Vault-Pfad existiert nicht: {vault_path}",
+            })
+        elif not vault_path.is_dir():
+            issues.append({
+                "level": "error",
+                "code": "path_not_directory",
+                "field": "vault_path",
+                "message": f"Vault-Pfad ist kein Ordner: {vault_path}",
+            })
+
+    if server_id == "filesystem":
+        for directory in _normalize_path_list(merged_cfg.get("allowed_directories")):
+            path = Path(directory).expanduser()
+            if not path.exists():
+                issues.append({
+                    "level": "error",
+                    "code": "path_missing",
+                    "field": "allowed_directories",
+                    "message": f"Freigegebener Pfad existiert nicht: {path}",
+                })
+            elif not path.is_dir():
+                issues.append({
+                    "level": "error",
+                    "code": "path_not_directory",
+                    "field": "allowed_directories",
+                    "message": f"Freigegebener Pfad ist kein Ordner: {path}",
+                })
+
+    return {
+        "ok": not any(issue["level"] == "error" for issue in issues),
+        "issues": issues,
+        "config": _mask_secrets(merged_cfg),
+        "config_source": sources,
+        "binary_path": str(binary) if binary else None,
+    }
+
+
+async def _ensure_mcp_server_defaults(server_id: str) -> None:
+    """Backfill per-server config from global app config when possible."""
+    if _mcp_bridge is None or _db is None:
+        return
+
+    reg = getattr(_mcp_bridge, "registry", None)
+    if reg is None or isinstance(reg, Mock):
+        return
+    if not all(hasattr(reg, name) for name in ("get_user_config", "set_installed", "is_installed")):
+        return
+
+    current = reg.get_user_config(server_id) if hasattr(reg, "get_user_config") else {}
+    updated, _sources = _merge_mcp_server_config(server_id, current)
+
+    if updated != current:
+        await reg.set_installed(_db, server_id, reg.is_installed(server_id), config=updated)
 
 
 # ── Dashboard ────────────────────────────────────────────────────────
@@ -1059,20 +1226,24 @@ async def list_mcp_servers():
     if _mcp_bridge is None:
         return {"servers": [], "bridge_initialized": False}
     try:
+        reg = getattr(_mcp_bridge, "registry", None)
         servers = []
         for s in _mcp_bridge.servers:
             try:
+                server_id = s.config.id
                 servers.append({
-                    "id": s.config.id,
+                    "id": server_id,
                     "name": s.config.name,
                     "command": s.config.command,
                     "enabled": s.config.enabled,
+                    "installed": bool(reg and hasattr(reg, "is_installed") and reg.is_installed(server_id)),
                     "status": s.status,
                     "pid": s.pid,
                     "tools_count": s.tools_count,
                     "last_call": str(s.last_call) if s.last_call else None,
                     "uptime_seconds": s.uptime_seconds,
                     "last_error": s.last_error,
+                    "preflight": _mcp_preflight(server_id),
                 })
             except Exception as e:
                 servers.append({
@@ -1086,6 +1257,13 @@ async def list_mcp_servers():
                     "last_call": None,
                     "uptime_seconds": 0,
                     "last_error": f"Serialization error: {e}",
+                    "preflight": {
+                        "ok": False,
+                        "issues": [{"level": "error", "code": "serialization_error", "message": f"Serialization error: {e}"}],
+                        "config": {},
+                        "config_source": {},
+                        "binary_path": None,
+                    },
                 })
         return {"bridge_initialized": True, "servers": servers}
     except Exception as e:
@@ -1107,6 +1285,10 @@ async def get_mcp_server_tools(server_id: str):
 async def restart_mcp_server(server_id: str):
     if _mcp_bridge is None:
         return {"error": "MCP not initialized"}
+    await _ensure_mcp_server_defaults(server_id)
+    preflight = _mcp_preflight(server_id)
+    if not preflight["ok"]:
+        return {"status": "error", "error": "Preflight fehlgeschlagen", "preflight": preflight}
     await _mcp_bridge.restart_server(server_id)
     return {"status": "restarted", "server_id": server_id}
 
@@ -1115,6 +1297,11 @@ async def toggle_mcp_server(server_id: str, body: dict):
     if _mcp_bridge is None:
         return {"error": "MCP not initialized"}
     enabled = body.get("enabled", True)
+    if enabled:
+        await _ensure_mcp_server_defaults(server_id)
+        preflight = _mcp_preflight(server_id)
+        if not preflight["ok"]:
+            return {"status": "error", "error": "Preflight fehlgeschlagen", "preflight": preflight}
     await _mcp_bridge.toggle_server(server_id, enabled)
     return {"status": "toggled", "server_id": server_id, "enabled": enabled}
 
@@ -1155,6 +1342,7 @@ async def api_mcp_catalog():
             "installed": reg.is_installed(sid) if hasattr(reg, "is_installed") else False,
             "enabled": bool(srv.config.enabled) if srv else False,
             "status": srv.status if srv else "stopped",
+            "preflight": _mcp_preflight(sid),
         })
     return out
 
@@ -1175,6 +1363,7 @@ async def api_mcp_servers():
             "tools_count": srv.tools_count,
             "last_error": srv.last_error,
             "uptime_seconds": srv.uptime_seconds,
+            "preflight": _mcp_preflight(sid),
         })
     return out
 
@@ -1197,7 +1386,13 @@ async def api_mcp_server_detail(server_id: str):
         "last_error": srv.last_error,
         "uptime_seconds": srv.uptime_seconds,
         "user_config": _mask_secrets(reg.get_user_config(server_id)),
+        "preflight": _mcp_preflight(server_id),
     }
+
+
+@mcp_router.get("/servers/{server_id}/preflight")
+async def api_mcp_server_preflight(server_id: str):
+    return _mcp_preflight(server_id)
 
 
 @mcp_router.get("/servers/{server_id}/logs")
@@ -1282,13 +1477,14 @@ async def api_mcp_install(server_id: str, body: MCPInstallBody):
     entry = CATALOG.get(server_id)
     if entry is None:
         return {"status": "error", "error": "not in catalog"}
+    config, _sources = _merge_mcp_server_config(server_id, body.config or {})
     result = await _installer.install(server_id, entry["package"], entry["bin"])
     if not result.success:
         return {"status": "error", "error": result.error, "stderr": result.stderr}
     reg = _mcp_bridge.registry
-    await reg.set_installed(_db, server_id, True, config=body.config)
+    await reg.set_installed(_db, server_id, True, config=config)
     await _broadcast_mcp_state_changed()
-    return {"status": "ok"}
+    return {"status": "ok", "preflight": _mcp_preflight(server_id)}
 
 
 @mcp_router.post("/servers/{server_id}/uninstall")
@@ -1307,6 +1503,10 @@ async def api_mcp_uninstall(server_id: str):
 @mcp_router.post("/servers/{server_id}/enable")
 async def api_mcp_enable(server_id: str):
     reg = _mcp_bridge.registry
+    await _ensure_mcp_server_defaults(server_id)
+    preflight = _mcp_preflight(server_id)
+    if not preflight["ok"]:
+        return {"status": "error", "error": "Preflight fehlgeschlagen", "preflight": preflight}
     await reg.set_enabled(_db, server_id, True)
     if hasattr(_mcp_bridge, "_start_server") and server_id not in getattr(_mcp_bridge, "_handles", {}):
         try:
@@ -1329,6 +1529,10 @@ async def api_mcp_disable(server_id: str):
 
 @mcp_router.post("/servers/{server_id}/restart")
 async def api_mcp_restart(server_id: str):
+    await _ensure_mcp_server_defaults(server_id)
+    preflight = _mcp_preflight(server_id)
+    if not preflight["ok"]:
+        return {"status": "error", "error": "Preflight fehlgeschlagen", "preflight": preflight}
     if hasattr(_mcp_bridge, "restart_server"):
         await _mcp_bridge.restart_server(server_id)
     await _broadcast_mcp_state_changed()

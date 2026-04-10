@@ -44,6 +44,7 @@ from backend.system_monitor import SystemMonitor
 from backend.mcp import MCPBridge, MCPRegistry, create_all_mcp_tools
 from backend.mcp.permissions import PermissionResolver
 from backend.mcp.approvals import ApprovalStore
+from backend.telegram_runtime import TelegramJobManager, TelegramResponseCache
 
 log = logging.getLogger(__name__)
 
@@ -56,6 +57,8 @@ flow: FalkensteinFlow = None
 budget_tracker = None
 telegram_task: asyncio.Task = None
 scheduler: SmartScheduler = None
+telegram_jobs: TelegramJobManager = None
+telegram_cache: TelegramResponseCache = None
 
 # External agents (Claude Code subagents etc.) — TTL-based, auto-expire after 60s
 _external_agents: dict[str, dict] = {}
@@ -80,6 +83,50 @@ async def handle_telegram_message(msg: dict):
         if result and telegram and telegram.enabled and chat_id:
             await telegram.send_message(result, chat_id=chat_id)
 
+    async def _send_job_ack(job_id: str):
+        if telegram and telegram.enabled and chat_id:
+            await telegram.send_message(
+                f"🧾 Job {job_id} angenommen.\nIch melde Fortschritt und Ergebnis hier.",
+                chat_id=chat_id,
+            )
+
+    async def _run_background(
+        message_text: str, *, image_path: str | None = None, job_id: str | None = None,
+    ):
+        try:
+            await flow.handle_message(
+                message_text, chat_id=chat_id, image_path=image_path, job_id=job_id,
+            )
+        except Exception as e:
+            logging.getLogger(__name__).error("Background flow error: %s", e, exc_info=True)
+            if telegram_jobs and job_id:
+                telegram_jobs.complete(job_id, status="error", result_preview=str(e))
+            if telegram and telegram.enabled and chat_id:
+                if job_id:
+                    await telegram.send_message(f"❌ Job {job_id} Fehler: {e}", chat_id=chat_id)
+                else:
+                    await telegram.send_message(f"Fehler: {e}", chat_id=chat_id)
+
+    async def _handle_user_text(message_text: str, *, image_path: str | None = None):
+        route = flow.rule_engine.route(message_text)
+        if image_path is not None or route.action not in ("quick_reply", "direct_mcp"):
+            job = telegram_jobs.create_job(chat_id, message_text or "[media]", route.action) if telegram_jobs else None
+            if job:
+                await _send_job_ack(job.id)
+            asyncio.create_task(_run_background(message_text, image_path=image_path, job_id=job.id if job else None))
+            return
+
+        if route.action == "quick_reply" and telegram_cache:
+            cached = telegram_cache.get(message_text)
+            if cached is not None:
+                await _send_result(cached)
+                return
+
+        result = await flow.handle_message(message_text, chat_id=chat_id)
+        if route.action == "quick_reply" and telegram_cache and result:
+            telegram_cache.set(message_text, result)
+        await _send_result(result)
+
     try:
         # Voice message → transcribe with Whisper, then process as text
         voice_path = msg.get("voice_path")
@@ -90,10 +137,7 @@ async def handle_telegram_message(msg: dict):
             transcribed = await transcribe(voice_path)
             if transcribed:
                 full_text = f"{text} {transcribed}".strip() if text else transcribed
-                result = await flow.handle_message(full_text, chat_id=chat_id)
-                # quick_reply and direct_mcp results aren't sent by EventBus
-                if flow.rule_engine.route(full_text).action in ("quick_reply", "direct_mcp"):
-                    await _send_result(result)
+                await _handle_user_text(full_text)
             else:
                 if telegram and telegram.enabled:
                     await telegram.send_message(
@@ -104,16 +148,12 @@ async def handle_telegram_message(msg: dict):
         # Image → analyze with vision
         image_path = msg.get("image_path")
         if image_path:
-            result = await flow.handle_message(text, chat_id=chat_id, image_path=image_path)
+            await _handle_user_text(text, image_path=image_path)
             return
 
         # Regular text
         if text:
-            # Check if this will be a quick_reply or direct_mcp (no EventBus involvement)
-            route = flow.rule_engine.route(text)
-            result = await flow.handle_message(text, chat_id=chat_id)
-            if route.action in ("quick_reply", "direct_mcp"):
-                await _send_result(result)
+            await _handle_user_text(text)
 
     except Exception as e:
         import logging
@@ -124,7 +164,7 @@ async def handle_telegram_message(msg: dict):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global db, telegram, telegram_task, flow, budget_tracker, scheduler, fact_memory, soul_memory
+    global db, telegram, telegram_task, flow, budget_tracker, scheduler, fact_memory, soul_memory, telegram_jobs, telegram_cache
 
     # 1. Database
     db = Database(DB_PATH)
@@ -153,19 +193,33 @@ async def lifespan(app: FastAPI):
     await system_monitor.start()
 
     # 5. Paths from config
-    vault_path = config_service.get_path("obsidian_vault_path")
-    workspace = config_service.get_path("workspace_path")
+    def _cfg(key: str, fallback: str = "") -> str:
+        value = config_service.get(key, fallback)
+        return value if value not in (None, "") else fallback
+
+    vault_path = config_service.get_path("obsidian_vault_path", str(settings.obsidian_vault_path))
+    workspace = config_service.get_path("workspace_path", str(settings.workspace_path))
     workspace.mkdir(parents=True, exist_ok=True)
+
+    telegram_token = _cfg("telegram_bot_token", TELEGRAM_TOKEN)
+    telegram_chat_id = _cfg("telegram_chat_id", TELEGRAM_CHAT_ID)
+    telegram_allowed_chat_ids = _cfg("telegram_allowed_chat_ids", TELEGRAM_ALLOWED_CHAT_IDS)
+
+    ollama_host = _cfg("ollama_host", settings.ollama_host)
+    ollama_model = _cfg("ollama_model", settings.ollama_model)
+    ollama_model_light = _cfg("ollama_model_light", settings.ollama_model_light) or ollama_model
+    ollama_model_heavy = _cfg("ollama_model_heavy", settings.ollama_model_heavy) or ollama_model
+    ollama_keep_alive = _cfg("ollama_keep_alive", settings.ollama_keep_alive)
 
     # 6. Telegram + Allowlist
     allowlist = TelegramAllowlist(
-        owner_chat_id=TELEGRAM_CHAT_ID,
-        allowed_ids_csv=TELEGRAM_ALLOWED_CHAT_IDS,
+        owner_chat_id=telegram_chat_id,
+        allowed_ids_csv=telegram_allowed_chat_ids,
     )
     media_dir = workspace / "_media"
     media_dir.mkdir(parents=True, exist_ok=True)
     telegram = TelegramBot(
-        token=TELEGRAM_TOKEN, chat_id=TELEGRAM_CHAT_ID,
+        token=telegram_token, chat_id=telegram_chat_id,
         allowlist=allowlist, download_dir=media_dir,
     )
 
@@ -176,23 +230,30 @@ async def lifespan(app: FastAPI):
 
     # Native Ollama Client
     native_ollama = NativeOllamaClient(
-        host=settings.ollama_host,
-        model_light=settings.model_light,
-        model_heavy=settings.model_heavy,
-        keep_alive=settings.ollama_keep_alive,
+        host=ollama_host,
+        model_light=ollama_model_light,
+        model_heavy=ollama_model_heavy,
+        keep_alive=ollama_keep_alive,
     )
 
     # VaultIndex
     vault_index = None
-    if settings.obsidian_vault_path:
-        vault_index = VaultIndex(settings.obsidian_vault_path)
-        vault_index.scan()
+    if vault_path:
+        try:
+            vault_path.mkdir(parents=True, exist_ok=True)
+            vault_index = VaultIndex(vault_path)
+            vault_index.scan()
+        except Exception as e:
+            log.warning("Vault index init failed for %s: %s", vault_path, e)
 
     # EventBus
+    telegram_jobs = TelegramJobManager()
+    telegram_cache = TelegramResponseCache()
     event_bus = FalkensteinEventBus(
         ws_manager=ws_mgr,
         telegram_bot=telegram,
         db=db,
+        telegram_jobs=telegram_jobs,
     )
 
     # ── MCP Bridge ────────────────────────────────────────────────────
@@ -233,6 +294,15 @@ async def lifespan(app: FastAPI):
     ollama_mgr_tool = CrewOllamaManagerTool()
     self_config_tool = CrewSelfConfigTool()
     ops_exec_tool = OpsExecutorTool()
+
+    project_root = Path(__file__).parent.parent
+    code_exec_tool.set_executor(CodeExecutorTool(workspace))
+    shell_tool.set_executor(ShellRunnerTool(workspace))
+    sys_shell_tool.set_executor(SystemShellTool())
+    obsidian_tool.set_executor(ObsidianManagerTool(vault_path))
+    ollama_mgr_tool.set_executor(OllamaManagerTool())
+    self_config_tool.set_executor(SelfConfigTool(project_root))
+    ops_exec_tool.set_executor(OpsExecutor(project_root))
 
     # Tool sets per crew type
     crew_tools = {

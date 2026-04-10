@@ -44,7 +44,8 @@ class FalkensteinFlow:
         self.crew_registry = dict(CREW_CLASSES)
 
     async def handle_message(self, message: str, chat_id: str | None = None,
-                             image_path: str | None = None) -> str:
+                             image_path: str | None = None,
+                             job_id: str | None = None) -> str:
         # 1. Security check
         guard_result = self.input_guard.check_patterns(message)
         if guard_result.action == "BLOCK":
@@ -58,7 +59,7 @@ class FalkensteinFlow:
             # No vault context for quick replies — keep it fast
             return await self.ollama.quick_reply(message, context="Antworte kurz und direkt auf Deutsch.")
         if route.action == "direct_mcp" and self.mcp_bridge:
-            return await self._handle_direct_mcp(message, chat_id)
+            return await self._handle_direct_mcp(message, chat_id, job_id=job_id)
         if route.action == "crew" and route.crew_type:
             crew_type = route.crew_type
         else:
@@ -67,9 +68,9 @@ class FalkensteinFlow:
             if classification.get("priority") == "premium":
                 crew_type = "premium"
         log.info("Routing to crew: %s", crew_type)
-        return await self._run_crew(crew_type, message, chat_id)
+        return await self._run_crew(crew_type, message, chat_id, job_id=job_id)
 
-    async def _run_crew(self, crew_type, task_description, chat_id):
+    async def _run_crew(self, crew_type, task_description, chat_id, job_id: str | None = None):
         crew_cls = self.crew_registry.get(crew_type, CoderCrew)
         vault_ctx = self.vault_index.as_context() if self.vault_index else ""
         crew_tools = self.tools.get(crew_type, [])
@@ -82,9 +83,12 @@ class FalkensteinFlow:
             chat_id=chat_id, vault_context=vault_ctx, tools=crew_tools,
             llm_model=llm_model, fc_llm=fc_llm if crew_type not in ("writer", "ops", "premium") else None,
         )
+        crew.job_id = job_id
         return await crew.run()
 
-    async def _handle_direct_mcp(self, message: str, chat_id: int | None = None) -> str:
+    async def _handle_direct_mcp(
+        self, message: str, chat_id: int | None = None, job_id: str | None = None,
+    ) -> str:
         try:
             # Pass discovered tools so the LLM knows what's available
             tools_info = []
@@ -103,7 +107,7 @@ class FalkensteinFlow:
             tool_name = mcp_intent.get("tool_name")
             args = mcp_intent.get("args", {})
             if not server_id or not tool_name:
-                return await self._run_crew("ops", message, chat_id)
+                return await self._run_crew("ops", message, chat_id, job_id=job_id)
             result = await self.mcp_bridge.call_tool(server_id, tool_name, args)
             return result.output if result.success else f"Fehler: {result.output}"
         except Exception as e:

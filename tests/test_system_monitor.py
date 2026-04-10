@@ -77,7 +77,7 @@ def test_parse_powermetrics_missing_fields_returns_none():
 @pytest.mark.asyncio
 async def test_system_metrics_endpoint():
     """Test /api/admin/system/metrics returns all required keys."""
-    from httpx import AsyncClient
+    from httpx import ASGITransport, AsyncClient
     from fastapi import FastAPI
     from backend.admin_api import router
     import backend.admin_api as admin_module
@@ -89,7 +89,7 @@ async def test_system_metrics_endpoint():
     app = FastAPI()
     app.include_router(router)
 
-    async with AsyncClient(app=app, base_url="http://test") as ac:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         resp = await ac.get("/api/admin/system/metrics")
 
     assert resp.status_code == 200

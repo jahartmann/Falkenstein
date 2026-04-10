@@ -49,8 +49,15 @@ export class HUD {
   }
 
   _updateStats() {
-    const agentCount = this.am.agents.size;
+    const agents = [...this.am.agents.values()];
+    const agentCount = agents.length;
+    const workingCount = agents.filter(agent => agent.state === 'working').length;
+    const breakCount = agents.filter(agent => agent.state === 'on_break').length;
     document.getElementById('hud-agents').textContent = agentCount;
+    const workingEl = document.getElementById('hud-working');
+    const breakEl = document.getElementById('hud-break');
+    if (workingEl) workingEl.textContent = workingCount;
+    if (breakEl) breakEl.textContent = breakCount;
   }
 
   _drawMinimapBase() {

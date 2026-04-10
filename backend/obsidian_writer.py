@@ -6,6 +6,7 @@ from __future__ import annotations
 import datetime
 import re
 from pathlib import Path
+from backend.obsidian_paths import resolve_falkenstein_root
 
 VAULT_PREFIX = "KI-Büro"
 
@@ -64,9 +65,10 @@ class ObsidianWriter:
 
     def __init__(self, vault_path: Path):
         self.vault = vault_path.resolve()
-        self.wissen_dir = self.vault / VAULT_PREFIX / "Wissen"
-        self.projekte_dir = self.vault / VAULT_PREFIX / "Projekte"
-        self.reports_dir = self.vault / VAULT_PREFIX / "Reports"
+        self.base_dir = resolve_falkenstein_root(self.vault)
+        self.wissen_dir = self.base_dir / "Wissen"
+        self.projekte_dir = self.base_dir / "Projekte"
+        self.reports_dir = self.base_dir / "Reports"
 
     @staticmethod
     def _slugify(title: str) -> str:

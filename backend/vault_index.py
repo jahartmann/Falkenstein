@@ -6,17 +6,21 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from typing import Optional
+from backend.obsidian_paths import (
+    DEFAULT_FALKENSTEIN_ROOT,
+    resolve_falkenstein_root_name,
+)
 
 CREW_TO_FOLDER = {
-    "researcher": "KI-Buero/Recherchen",
-    "writer": "KI-Buero/Guides",
-    "coder": "KI-Buero/Code",
-    "ki_expert": "KI-Buero/Recherchen",
-    "analyst": "KI-Buero/Reports",
-    "web_design": "KI-Buero/Code",
-    "swift": "KI-Buero/Code",
-    "ops": "KI-Buero/Reports",
-    "premium": "KI-Buero/Recherchen",
+    "researcher": f"{DEFAULT_FALKENSTEIN_ROOT}/Recherchen",
+    "writer": f"{DEFAULT_FALKENSTEIN_ROOT}/Guides",
+    "coder": f"{DEFAULT_FALKENSTEIN_ROOT}/Code",
+    "ki_expert": f"{DEFAULT_FALKENSTEIN_ROOT}/Recherchen",
+    "analyst": f"{DEFAULT_FALKENSTEIN_ROOT}/Reports",
+    "web_design": f"{DEFAULT_FALKENSTEIN_ROOT}/Code",
+    "swift": f"{DEFAULT_FALKENSTEIN_ROOT}/Code",
+    "ops": f"{DEFAULT_FALKENSTEIN_ROOT}/Reports",
+    "premium": f"{DEFAULT_FALKENSTEIN_ROOT}/Recherchen",
 }
 
 KNOWLEDGE_FOLDERS = {
@@ -83,7 +87,10 @@ class VaultIndex:
 
     def find_best_folder(self, crew_type: str, topic: str = "") -> str:  # noqa: ARG002
         """Return the designated output folder for *crew_type*."""
-        return CREW_TO_FOLDER.get(crew_type, "KI-Buero/Recherchen")
+        root = resolve_falkenstein_root_name(self._vault)
+        suffix = CREW_TO_FOLDER.get(crew_type, f"{DEFAULT_FALKENSTEIN_ROOT}/Recherchen")
+        _, _, tail = suffix.partition("/")
+        return f"{root}/{tail}" if tail else root
 
     def find_related_note(self, topic: str) -> Optional[str]:
         """Find an existing note whose filename matches *topic*.

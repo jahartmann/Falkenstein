@@ -32,12 +32,6 @@ export class BootScene extends Phaser.Scene {
         this.load.spritesheet(key, url, { frameWidth: 16, frameHeight: 32 });
       }
     }
-
-    for (let i = 0; i <= 5; i++) {
-      this.load.spritesheet(`char_${i}`, `/static/assets/characters/char_${i}.png`, {
-        frameWidth: 16, frameHeight: 32
-      });
-    }
   }
 
   create() {

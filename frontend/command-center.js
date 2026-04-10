@@ -656,6 +656,43 @@ async function submitTask() {
 // MCP
 // ============================================
 
+function getMcpIssues(preflight) {
+  return Array.isArray(preflight?.issues) ? preflight.issues : [];
+}
+
+function firstMcpIssue(preflight) {
+  return getMcpIssues(preflight)[0]?.message || '';
+}
+
+function renderMcpPreflight(preflight) {
+  const issues = getMcpIssues(preflight);
+  if (issues.length === 0) return '';
+  return `
+    <div class="mcp-preflight-list">
+      ${issues.map(issue => `
+        <div class="mcp-preflight-item mcp-preflight-item-${esc(issue.level || 'error')}">
+          ${esc(issue.message)}
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+function renderMcpResolvedConfig(preflight) {
+  const cfg = preflight?.config || {};
+  const lines = [];
+  if (cfg.vault_path) lines.push(`Vault: ${cfg.vault_path}`);
+  if (Array.isArray(cfg.allowed_directories) && cfg.allowed_directories.length > 0) {
+    lines.push(`Freigaben: ${cfg.allowed_directories.join(', ')}`);
+  }
+  if (lines.length === 0) return '';
+  return `
+    <div class="mcp-config-list">
+      ${lines.map(line => `<div class="mcp-config-item">${esc(line)}</div>`).join('')}
+    </div>
+  `;
+}
+
 async function loadMCP() {
   try {
     const data = await api('/mcp/servers');
@@ -698,8 +735,9 @@ async function loadMCP() {
       const isError = s.status === 'error';
       const dotClass = isRunning ? 'online' : '';
       const statusLabel = s.status || (s.enabled ? 'stopped' : 'disabled');
+      const preflightError = s.preflight && !s.preflight.ok;
       return `
-      <div class="card" id="mcp-card-${esc(s.id || s.name)}" style="${isError ? 'border-left:3px solid #e74c3c' : ''}">
+      <div class="card" id="mcp-card-${esc(s.id || s.name)}" style="${isError || preflightError ? 'border-left:3px solid #e74c3c' : ''}">
         <div class="card-header">
           <div style="display:flex;align-items:center;gap:8px">
             <div class="status-dot ${dotClass}"></div>
@@ -707,9 +745,14 @@ async function loadMCP() {
           </div>
           ${badge(statusLabel)}
         </div>
-        <div style="font-size:13px;color:var(--text-muted);margin-bottom:8px">${s.tools_count || 0} Tools verfuegbar</div>
+        <div style="font-size:13px;color:var(--text-muted);margin-bottom:8px">
+          ${s.tools_count || 0} Tools verfuegbar
+          ${s.installed === false ? ' · nicht installiert' : ''}
+        </div>
         ${s.command ? `<div style="font-size:12px;color:var(--text-muted)">Cmd: ${esc(s.command)}</div>` : ''}
+        ${renderMcpResolvedConfig(s.preflight)}
         ${s.last_error ? `<div style="font-size:12px;color:#e74c3c;margin-top:4px;word-break:break-word">Fehler: ${esc(s.last_error)}</div>` : ''}
+        ${renderMcpPreflight(s.preflight)}
         <div class="mt-16" style="display:flex;gap:6px;flex-wrap:wrap">
           <button class="btn btn-sm" onclick="loadMCPTools('${esc(s.id || s.name)}')">Tools anzeigen</button>
           <button class="btn btn-sm" onclick="restartMCPServer('${esc(s.id || s.name)}')">Neustart</button>
@@ -745,7 +788,12 @@ async function loadMCPTools(serverId) {
 
 async function restartMCPServer(serverId) {
   try {
-    await api('/mcp/servers/' + encodeURIComponent(serverId) + '/restart', { method: 'POST' });
+    const result = await api('/mcp/servers/' + encodeURIComponent(serverId) + '/restart', { method: 'POST' });
+    if (result?.status === 'error') {
+      showToast(firstMcpIssue(result.preflight) || result.error || 'MCP Preflight fehlgeschlagen');
+      loadMCP();
+      return;
+    }
     showToast('MCP Server wird neu gestartet');
     setTimeout(loadMCP, 2000);
   } catch (e) { showToast('Fehler: ' + e.message); }
@@ -753,10 +801,15 @@ async function restartMCPServer(serverId) {
 
 async function toggleMCPServer(serverId, enabled) {
   try {
-    await api('/mcp/servers/' + encodeURIComponent(serverId) + '/toggle', {
+    const result = await api('/mcp/servers/' + encodeURIComponent(serverId) + '/toggle', {
       method: 'POST',
       body: JSON.stringify({ enabled }),
     });
+    if (result?.status === 'error') {
+      showToast(firstMcpIssue(result.preflight) || result.error || 'MCP Preflight fehlgeschlagen');
+      loadMCP();
+      return;
+    }
     showToast(enabled ? 'Server aktiviert' : 'Server deaktiviert');
     loadMCP();
   } catch (e) { showToast('Fehler: ' + e.message); }
@@ -1549,6 +1602,8 @@ const MCPStore = (() => {
           </div>
         </div>
         <div class="mcp-card-desc">${escMcp(e.description)}</div>
+        ${renderMcpResolvedConfig(e.preflight)}
+        ${renderMcpPreflight(e.preflight)}
         <label style="font-size:0.8rem;display:flex;gap:0.4rem;align-items:center;">
           <input type="checkbox" class="mcp-toggle-enabled" ${e.enabled ? "checked" : ""} />
           Enabled
@@ -1577,6 +1632,7 @@ const MCPStore = (() => {
           </div>
         </div>
         <div class="mcp-card-desc">${escMcp(e.description)}</div>
+        ${(e.requires_config || []).length > 0 ? `<div class="mcp-config-item">Benötigt: ${escMcp(e.requires_config.join(', '))}</div>` : ""}
         ${unavailable ? '<div class="mcp-card-error">Not available on this platform</div>' : ""}
         <div class="mcp-card-actions">
           <button class="mcp-btn-install" ${unavailable ? "disabled" : ""}>Install</button>
@@ -1608,7 +1664,12 @@ const MCPStore = (() => {
     document.querySelectorAll(".mcp-btn-restart").forEach(btn => {
       btn.onclick = async () => {
         const id = btn.closest(".mcp-card").dataset.id;
-        await fetch(`/api/mcp/servers/${id}/restart`, {method: "POST"});
+        const result = await fetch(`/api/mcp/servers/${id}/restart`, {method: "POST"}).then(r => r.json());
+        if (result?.status === "error") {
+          showToast(firstMcpIssue(result.preflight) || result.error || "MCP Preflight fehlgeschlagen");
+          fetchAll();
+          return;
+        }
         fetchAll();
       };
     });
@@ -1616,7 +1677,13 @@ const MCPStore = (() => {
       cb.onchange = async () => {
         const id = cb.closest(".mcp-card").dataset.id;
         const action = cb.checked ? "enable" : "disable";
-        await fetch(`/api/mcp/servers/${id}/${action}`, {method: "POST"});
+        const result = await fetch(`/api/mcp/servers/${id}/${action}`, {method: "POST"}).then(r => r.json());
+        if (result?.status === "error") {
+          showToast(firstMcpIssue(result.preflight) || result.error || "MCP Preflight fehlgeschlagen");
+          cb.checked = !cb.checked;
+          fetchAll();
+          return;
+        }
         fetchAll();
       };
     });
@@ -1720,6 +1787,9 @@ const MCPStore = (() => {
       btn.textContent = prev;
 
       if (r.status === "ok") {
+        if (r.preflight && !r.preflight.ok) {
+          showToast(firstMcpIssue(r.preflight) || "Installiert, aber noch nicht startklar");
+        }
         closeModal();
         fetchAll();
       } else {

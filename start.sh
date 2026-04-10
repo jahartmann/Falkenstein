@@ -56,10 +56,12 @@ if [ ! -d "$VENV_DIR" ]; then
     $PYTHON_BIN -m venv "$VENV_DIR"
 fi
 source "$VENV_DIR/bin/activate"
+VENV_PYTHON="$PWD/$VENV_DIR/bin/python"
+VENV_PIP="$PWD/$VENV_DIR/bin/pip"
 
 # 3. Dependencies
 echo -e "${YELLOW}Installiere Abhängigkeiten...${NC}"
-pip install -q -r requirements.txt
+"$VENV_PIP" install -q -r requirements.txt
 
 # 4. .env setup
 if [ ! -f ".env" ]; then
@@ -119,7 +121,7 @@ _git_watch() {
         NEW_HEAD=$(git rev-parse HEAD 2>/dev/null)
         if [ "$OLD_HEAD" != "$NEW_HEAD" ]; then
             echo -e "\n${GREEN}[Git] Neue Änderungen gezogen. Server wird neugestartet...${NC}"
-            source "$VENV_DIR/bin/activate" && pip install -q -r requirements.txt 2>/dev/null
+            source "$VENV_DIR/bin/activate" && "$VENV_PIP" install -q -r requirements.txt 2>/dev/null
             _kill_server
         fi
     done
@@ -139,7 +141,7 @@ echo ""
 trap 'echo -e "\n${YELLOW}Server gestoppt.${NC}"; _kill_server; kill $WATCHER_PID 2>/dev/null; exit 0' INT TERM
 
 while true; do
-    python -m backend.main &
+    "$VENV_PYTHON" -m backend.main &
     SERVER_PID=$!
 
     # Start git watcher on first loop
