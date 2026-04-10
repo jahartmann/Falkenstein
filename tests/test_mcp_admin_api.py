@@ -244,3 +244,20 @@ def test_api_permission_put_and_delete(admin_app_client):
     assert r3.status_code == 200
     r4 = admin_app_client.get("/api/mcp/permissions")
     assert not any(x["tool_name"] == "some_tool" for x in r4.json())
+
+
+def test_api_config_put_normalizes_filesystem_directories(admin_app_client, tmp_path):
+    path_a = tmp_path / "one"
+    path_b = tmp_path / "two"
+    path_a.mkdir()
+    path_b.mkdir()
+
+    r = admin_app_client.put(
+        "/api/mcp/servers/filesystem/config",
+        json={"config": {"allowed_directories": f"{path_a}\n{path_b}"}},
+    )
+
+    assert r.status_code == 200
+    data = r.json()
+    assert data["status"] == "ok"
+    assert data["preflight"]["config"]["allowed_directories"] == [str(path_a), str(path_b)]

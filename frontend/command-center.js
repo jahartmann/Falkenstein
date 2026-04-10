@@ -693,6 +693,65 @@ function renderMcpResolvedConfig(preflight) {
   `;
 }
 
+function mcpConfigLabel(key) {
+  return {
+    vault_path: 'Vault-Pfad',
+    allowed_directories: 'Freigegebene Ordner',
+    BRAVE_API_KEY: 'Brave API Key',
+    GITHUB_PERSONAL_ACCESS_TOKEN: 'GitHub Token',
+    POSTGRES_URL: 'Postgres URL',
+    SLACK_BOT_TOKEN: 'Slack Bot Token',
+    SLACK_TEAM_ID: 'Slack Team ID',
+  }[key] || key;
+}
+
+function mcpConfigHint(key) {
+  return {
+    vault_path: 'Absoluter Pfad zum Obsidian-Vault.',
+    allowed_directories: 'Ein Ordner pro Zeile. Nur diese Ordner darf der Filesystem-MCP nutzen.',
+    BRAVE_API_KEY: 'API-Key aus dem Brave Search Dashboard.',
+    GITHUB_PERSONAL_ACCESS_TOKEN: 'Personal Access Token mit Repo-Rechten.',
+  }[key] || '';
+}
+
+function normalizeMcpConfigValue(key, value) {
+  if (key === 'allowed_directories') {
+    return Array.isArray(value) ? value.join('\n') : String(value || '');
+  }
+  return value == null ? '' : String(value);
+}
+
+function renderMcpConfigEditor(entry) {
+  const required = entry?.requires_config || [];
+  const cfg = entry?.preflight?.config || {};
+  if (required.length === 0) {
+    return '<p class="mcp-empty">Keine zusätzliche Konfiguration nötig.</p>';
+  }
+  return `
+    <div class="mcp-inline-config">
+      ${required.map(key => {
+        const isSecret = /token|secret|password|key/i.test(key);
+        const isMultiline = key === 'allowed_directories';
+        const value = normalizeMcpConfigValue(key, cfg[key]);
+        const control = isMultiline
+          ? `<textarea data-config-key="${escMcp(key)}" placeholder="${escMcp(mcpConfigHint(key))}">${escMcp(value)}</textarea>`
+          : `<input data-config-key="${escMcp(key)}" type="${isSecret ? 'password' : 'text'}" value="${escMcp(value)}" placeholder="${escMcp(mcpConfigHint(key))}" />`;
+        return `
+          <label class="mcp-inline-config-field">
+            <span>${escMcp(mcpConfigLabel(key))}</span>
+            ${control}
+            ${mcpConfigHint(key) ? `<small>${escMcp(mcpConfigHint(key))}</small>` : ''}
+          </label>
+        `;
+      }).join('')}
+      <div class="mcp-inline-config-actions">
+        <button class="mcp-btn-save-config">Speichern</button>
+        <button class="mcp-btn-preflight">Preflight prüfen</button>
+      </div>
+    </div>
+  `;
+}
+
 async function loadMCP() {
   try {
     const data = await api('/mcp/servers');
@@ -723,7 +782,7 @@ async function loadMCP() {
           <button class="btn btn-primary" onclick="setupMCP()">MCP Server aktivieren</button>
         </div>
         <div style="margin-top:16px;font-size:12px;color:var(--text-muted)">
-          Verfügbare Server: <strong>apple-mcp</strong> (Reminders, Calendar, Notes, Music, HomeKit),
+          Verfügbare Server: <strong>apple-mcp</strong> (Reminders, Calendar, Notes und Apple-Dienste),
           <strong>desktop-commander</strong> (Shell, Apps, Dateien),
           <strong>mcp-obsidian</strong> (Vault lesen/schreiben)
         </div>
@@ -1604,6 +1663,7 @@ const MCPStore = (() => {
         <div class="mcp-card-desc">${escMcp(e.description)}</div>
         ${renderMcpResolvedConfig(e.preflight)}
         ${renderMcpPreflight(e.preflight)}
+        ${e.last_error ? `<div class="mcp-card-error">${escMcp(e.last_error)}</div>` : ''}
         <label style="font-size:0.8rem;display:flex;gap:0.4rem;align-items:center;">
           <input type="checkbox" class="mcp-toggle-enabled" ${e.enabled ? "checked" : ""} />
           Enabled
@@ -1612,6 +1672,7 @@ const MCPStore = (() => {
           <button class="mcp-btn-restart">Restart</button>
           <button class="mcp-btn-logs">Logs</button>
           <button class="mcp-btn-tools">Tools</button>
+          <button class="mcp-btn-config">Config</button>
           <button class="mcp-btn-uninstall">Uninstall</button>
         </div>
         <div class="mcp-card-expander" data-slot="expand" hidden></div>
@@ -1739,6 +1800,45 @@ const MCPStore = (() => {
         slot.hidden = false;
       };
     });
+    document.querySelectorAll(".mcp-btn-config").forEach(btn => {
+      btn.onclick = async () => {
+        const card = btn.closest(".mcp-card");
+        const slot = card.querySelector('[data-slot="expand"]');
+        const id = card.dataset.id;
+        const entry = state.catalog.find(item => item.id === id) || state.servers.find(item => item.id === id) || {};
+        if (!slot.hidden && slot.dataset.mode === 'config') {
+          slot.hidden = true;
+          return;
+        }
+        slot.dataset.mode = 'config';
+        slot.innerHTML = renderMcpConfigEditor(entry);
+        slot.hidden = false;
+
+        slot.querySelector('.mcp-btn-save-config')?.addEventListener('click', async () => {
+          const config = {};
+          slot.querySelectorAll('[data-config-key]').forEach(input => {
+            config[input.dataset.configKey] = input.value;
+          });
+          const result = await fetch(`/api/mcp/servers/${id}/config`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ config }),
+          }).then(r => r.json());
+          if (result?.status !== 'ok') {
+            showToast(result?.error || 'Konfiguration konnte nicht gespeichert werden');
+            return;
+          }
+          showToast('MCP-Konfiguration gespeichert');
+          await fetchAll();
+        });
+
+        slot.querySelector('.mcp-btn-preflight')?.addEventListener('click', async () => {
+          const result = await fetch(`/api/mcp/servers/${id}/preflight`).then(r => r.json());
+          showToast(result?.ok ? 'Preflight erfolgreich' : (firstMcpIssue(result) || 'Preflight fehlgeschlagen'));
+          await fetchAll();
+        });
+      };
+    });
   }
 
   function openInstallModal(serverId) {
@@ -1746,9 +1846,14 @@ const MCPStore = (() => {
     if (!entry) return;
     document.getElementById("mcp-modal-title").textContent = `Install ${entry.name}`;
     const form = document.getElementById("mcp-install-form");
-    form.innerHTML = (entry.requires_config || []).map(k =>
-      `<label>${escMcp(k)}<input type="text" name="${escMcp(k)}" /></label>`
-    ).join("") || "<p>No configuration required.</p>";
+    form.innerHTML = (entry.requires_config || []).map(k => {
+      const isSecret = /token|secret|password|key/i.test(k);
+      const isMultiline = k === 'allowed_directories';
+      const control = isMultiline
+        ? `<textarea name="${escMcp(k)}" placeholder="${escMcp(mcpConfigHint(k))}"></textarea>`
+        : `<input type="${isSecret ? 'password' : 'text'}" name="${escMcp(k)}" placeholder="${escMcp(mcpConfigHint(k))}" />`;
+      return `<label>${escMcp(mcpConfigLabel(k))}${control}${mcpConfigHint(k) ? `<small>${escMcp(mcpConfigHint(k))}</small>` : ''}</label>`;
+    }).join("") || "<p>No configuration required.</p>";
     openModal();
     document.getElementById("mcp-install-confirm").onclick = async () => {
       const btn = document.getElementById("mcp-install-confirm");

@@ -4,6 +4,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock
 from backend.flow.falkenstein_flow import FalkensteinFlow
 from backend.flow.rule_engine import RuleEngine
+from backend.mcp.config import ToolSchema
 
 def _make_deps(mcp_bridge=None):
     event_bus = MagicMock()
@@ -58,3 +59,42 @@ async def test_flow_direct_mcp_calls_bridge():
     result = await flow._handle_direct_mcp("Erinnere mich morgen um 9", chat_id=42)
     assert result is not None
     deps["native_ollama"].classify_mcp.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_flow_direct_mcp_uses_heuristic_reminder_fallback():
+    bridge = MagicMock()
+    bridge.discover_tools = AsyncMock(return_value=[
+        ToolSchema(
+            name="reminders",
+            description="Search, create, and open reminders",
+            server_id="apple-mcp",
+            input_schema={"type": "object", "properties": {"operation": {"type": "string"}, "name": {"type": "string"}, "dueDate": {"type": "string"}}},
+        ),
+    ])
+    bridge.call_tool = AsyncMock(return_value=MagicMock(success=True, output="Reminder created"))
+    deps = _make_deps(mcp_bridge=bridge)
+    deps["native_ollama"].classify_mcp = AsyncMock(return_value={"server_id": None, "tool_name": None, "args": {}})
+    flow = FalkensteinFlow(**deps)
+
+    result = await flow._handle_direct_mcp("Erinnere mich morgen an Test", chat_id=42)
+
+    assert result == "Reminder created"
+    bridge.call_tool.assert_awaited_once()
+    args = bridge.call_tool.await_args.args[2]
+    assert args["operation"] == "create"
+    assert args["name"] == "Test"
+    assert "dueDate" in args
+
+
+@pytest.mark.asyncio
+async def test_flow_direct_mcp_music_without_tool_returns_clear_message():
+    bridge = MagicMock()
+    bridge.discover_tools = AsyncMock(return_value=[])
+    deps = _make_deps(mcp_bridge=bridge)
+    deps["native_ollama"].classify_mcp = AsyncMock(return_value={"server_id": None, "tool_name": None, "args": {}})
+    flow = FalkensteinFlow(**deps)
+
+    result = await flow._handle_direct_mcp('Spiel "lofi beats chill" auf Apple Music', chat_id=42)
+
+    assert "kein passendes MCP-Tool" in result

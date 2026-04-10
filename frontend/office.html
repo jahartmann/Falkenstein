@@ -83,15 +83,16 @@
       </select>
     </div>
     <div id="music-custom-row" class="music-custom-row hidden">
-      <input
+      <textarea
         id="music-custom-url"
         class="music-custom-url"
-        type="url"
-        placeholder="https://.../stream.mp3"
+        placeholder="https://.../track1.mp3&#10;https://.../track2.mp3"
         autocomplete="off"
-      >
-      <button class="music-secondary-btn" onclick="musicPlayer.saveCustomUrl()">Speichern</button>
-      <button class="music-secondary-btn" onclick="musicPlayer.clearCustomUrl()">Leeren</button>
+      ></textarea>
+      <div class="music-custom-actions">
+        <button class="music-secondary-btn" onclick="musicPlayer.saveCustomPlaylist()">Playlist speichern</button>
+        <button class="music-secondary-btn" onclick="musicPlayer.clearCustomUrl()">Leeren</button>
+      </div>
     </div>
   </div>
 

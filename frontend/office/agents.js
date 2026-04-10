@@ -87,6 +87,8 @@ const STATUS_COLORS = {
   npc: '#d9d9d9',
 };
 
+const SEATED_Y_OFFSET = -12;
+
 export class AgentManager {
   constructor(scene, tilemapManager) {
     this.scene = scene;
@@ -188,6 +190,7 @@ export class AgentManager {
       task: npcConfig.role,
       statusText: 'kommt an',
       tileX: spawnTile.x, tileY: spawnTile.y,
+      poseOffsetY: 0,
       state: 'walking_to_desk',
       path: null, pathIndex: 0, tweenActive: false,
       pauseTimer: null, breakCount: 0,
@@ -249,6 +252,7 @@ export class AgentManager {
       task: taskText || '',
       statusText: 'wartet',
       tileX: spawnTile.x, tileY: spawnTile.y,
+      poseOffsetY: 0,
       state: 'walking_to_desk',
       path: null, pathIndex: 0, tweenActive: false,
       pauseTimer: null, breakCount: 0,
@@ -308,6 +312,7 @@ export class AgentManager {
   _sitDown(agent) {
     agent.state = 'working';
     agent.sprite.anims.play(`${agent.spriteName}_sit`, true);
+    this._applyDeskPose(agent);
     this._setAgentStatus(agent, 'arbeitet', STATUS_COLORS.working);
     // Occasionally show a "back to work" bubble
     if (agent.isNPC && Math.random() < 0.3) {
@@ -584,6 +589,7 @@ export class AgentManager {
 
     const next = agent.path[agent.pathIndex];
     const pos = this.tm.tileToWorld(next.x, next.y);
+    agent.poseOffsetY = 0;
 
     const dx = next.x - agent.tileX;
     const dy = next.y - agent.tileY;
@@ -648,6 +654,12 @@ export class AgentManager {
         agent.indicator.setFillStyle(fill, 0.95);
       }
     }
+  }
+
+  _applyDeskPose(agent) {
+    const anchor = this.tm.tileToWorld(agent.tileX, agent.tileY);
+    agent.poseOffsetY = SEATED_Y_OFFSET;
+    agent.sprite.setPosition(anchor.x, anchor.y + agent.poseOffsetY);
   }
 
   _formatToolLabel(toolName) {

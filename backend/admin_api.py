@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import glob as globmod
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -106,7 +107,17 @@ class LLMRoutingUpdate(BaseModel):
     routing: dict[str, str]  # e.g. {"classify": "local", "action": "claude", ...}
 
 
+class AssistRequest(BaseModel):
+    text: str
+    chat_id: str | None = None
+    direct_only: bool = False
+
+
 class MCPInstallBody(BaseModel):
+    config: dict = {}
+
+
+class MCPConfigBody(BaseModel):
     config: dict = {}
 
 
@@ -128,7 +139,8 @@ async def _broadcast_mcp_state_changed():
 
 def _normalize_path_list(value) -> list[str]:
     if isinstance(value, str):
-        return [part.strip() for part in value.split(",") if part.strip()]
+        raw_parts = re.split(r"[\n,;]+", value)
+        return [part.strip() for part in raw_parts if part.strip()]
     if isinstance(value, (list, tuple, set)):
         return [str(part).strip() for part in value if str(part).strip()]
     return []
@@ -609,6 +621,21 @@ async def submit_task(data: TaskSubmit):
     chat_id = data.chat_id or "dashboard"
     asyncio.create_task(_flow.handle_message(data.text, chat_id=chat_id))
     return {"submitted": True}
+
+
+@router.post("/assist")
+async def assist(data: AssistRequest):
+    """Run a request immediately and return the result to the caller."""
+    if not _flow:
+        return {"status": "error", "error": "Not initialized"}
+    try:
+        if data.direct_only and hasattr(_flow, "_handle_direct_mcp"):
+            result = await _flow._handle_direct_mcp(data.text, chat_id=data.chat_id)
+        else:
+            result = await _flow.handle_message(data.text, chat_id=data.chat_id)
+        return {"status": "ok", "result": result}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
 
 
 @router.post("/tasks/create")
@@ -1393,6 +1420,23 @@ async def api_mcp_server_detail(server_id: str):
 @mcp_router.get("/servers/{server_id}/preflight")
 async def api_mcp_server_preflight(server_id: str):
     return _mcp_preflight(server_id)
+
+
+@mcp_router.put("/servers/{server_id}/config")
+async def api_mcp_server_config_put(server_id: str, body: MCPConfigBody):
+    reg = _mcp_bridge.registry
+    if CATALOG.get(server_id) is None:
+        return {"status": "error", "error": "not in catalog"}
+    current = reg.get_user_config(server_id) if hasattr(reg, "get_user_config") else {}
+    merged = dict(current or {})
+    merged.update(body.config or {})
+    merged, _sources = _merge_mcp_server_config(server_id, merged)
+    if "allowed_directories" in merged:
+        merged["allowed_directories"] = _normalize_path_list(merged.get("allowed_directories"))
+    await reg.set_installed(_db, server_id, reg.is_installed(server_id), config=merged)
+    preflight = _mcp_preflight(server_id)
+    await _broadcast_mcp_state_changed()
+    return {"status": "ok", "preflight": preflight, "config": _mask_secrets(merged)}
 
 
 @mcp_router.get("/servers/{server_id}/logs")

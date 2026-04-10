@@ -52,10 +52,16 @@ class MusicPlayer {
 
   _currentTracks() {
     if (this.genre === 'custom') {
-      const customUrl = (localStorage.getItem('music_custom_url') || '').trim();
-      return customUrl ? [customUrl] : [];
+      return this._getCustomPlaylist();
     }
     return this.genres[this.genre]?.tracks || [];
+  }
+
+  _getCustomPlaylist() {
+    return (localStorage.getItem('music_custom_playlist') || '')
+      .split('\n')
+      .map(line => line.trim())
+      .filter(Boolean);
   }
 
   _updateTitle() {
@@ -86,15 +92,18 @@ class MusicPlayer {
       return;
     }
     if (this.genre === 'custom') {
-      const customUrl = (localStorage.getItem('music_custom_url') || '').trim();
-      if (!customUrl) {
+      const playlist = this._getCustomPlaylist();
+      if (playlist.length === 0) {
         el.textContent = 'Eigene Quelle fehlt noch';
         return;
       }
       try {
-        el.textContent = new URL(customUrl).host || 'Eigene Audio-Quelle';
+        const firstTrack = new URL(playlist[0]);
+        el.textContent = playlist.length > 1
+          ? `${firstTrack.host} · ${playlist.length} Tracks`
+          : (firstTrack.host || 'Eigene Audio-Quelle');
       } catch (_) {
-        el.textContent = 'Eigene Audio-Quelle';
+        el.textContent = playlist.length > 1 ? `Eigene Playlist · ${playlist.length} Tracks` : 'Eigene Audio-Quelle';
       }
       return;
     }
@@ -123,7 +132,7 @@ class MusicPlayer {
     if (!row || !input) return;
     const isCustom = this.genre === 'custom';
     row.classList.toggle('hidden', !isCustom);
-    input.value = (localStorage.getItem('music_custom_url') || '').trim();
+    input.value = (localStorage.getItem('music_custom_playlist') || '').trim();
   }
 
   _setPulse(active) {
@@ -180,15 +189,20 @@ class MusicPlayer {
     const term = this._appleMusicTerms[genre] || 'lofi beats';
     try {
       const token = localStorage.getItem('falkenstein_token');
-      const resp = await fetch('/api/admin/tasks/submit', {
+      const resp = await fetch('/api/admin/assist', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           ...(token ? { 'Authorization': 'Bearer ' + token } : {}),
         },
-        body: JSON.stringify({ text: `Spiel "${term}" auf Apple Music` }),
+        body: JSON.stringify({ text: `Spiel "${term}" auf Apple Music`, direct_only: true }),
       });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const payload = await resp.json();
+      if (payload?.status !== 'ok') throw new Error(payload?.error || 'MCP request failed');
+      if (String(payload?.result || '').toLowerCase().includes('kein passendes mcp-tool aktiv')) {
+        throw new Error(payload.result);
+      }
       const el = document.getElementById('music-title');
       if (el) el.textContent = `Apple Music: ${genre.replace('apple_', '')}`;
       this._updateSubtitle('Streaming via MCP');
@@ -465,14 +479,17 @@ class MusicPlayer {
     else this._updateTitle();
   }
 
-  saveCustomUrl() {
+  saveCustomPlaylist() {
     const input = document.getElementById('music-custom-url');
     if (!input) return;
-    const customUrl = input.value.trim();
-    if (!customUrl) {
-      localStorage.removeItem('music_custom_url');
+    const playlist = input.value
+      .split('\n')
+      .map(line => line.trim())
+      .filter(Boolean);
+    if (playlist.length === 0) {
+      localStorage.removeItem('music_custom_playlist');
     } else {
-      localStorage.setItem('music_custom_url', customUrl);
+      localStorage.setItem('music_custom_playlist', playlist.join('\n'));
     }
     if (this.genre === 'custom') {
       const wasPlaying = this.isPlaying;
@@ -483,7 +500,7 @@ class MusicPlayer {
   }
 
   clearCustomUrl() {
-    localStorage.removeItem('music_custom_url');
+    localStorage.removeItem('music_custom_playlist');
     const input = document.getElementById('music-custom-url');
     if (input) input.value = '';
     if (this.genre === 'custom') {
@@ -505,9 +522,9 @@ class MusicPlayer {
     const customInput = document.getElementById('music-custom-url');
     if (customInput) {
       customInput.addEventListener('keydown', (event) => {
-        if (event.key === 'Enter') {
+        if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
           event.preventDefault();
-          this.saveCustomUrl();
+          this.saveCustomPlaylist();
         }
       });
     }

@@ -54,6 +54,7 @@ export class TilemapManager {
     this._buildCollisionGrid(mapData);
     this._extractRooms(mapData);
     this._extractDesks(mapData);
+    this._renderRoomLabels();
 
     return this;
   }
@@ -110,6 +111,23 @@ export class TilemapManager {
       occupied: false,
       agentId: null,
     }));
+  }
+
+  _renderRoomLabels() {
+    for (const room of this.rooms) {
+      if (!room.name) continue;
+      const pos = this.tileToWorld(room.centerX, room.centerY);
+      const label = this.scene.add.text(pos.x, pos.y - 38, room.name, {
+        fontSize: '11px',
+        fontFamily: 'Courier New, monospace',
+        color: '#9fb6d9',
+        backgroundColor: '#0d132199',
+        padding: { x: 6, y: 3 },
+      });
+      label.setOrigin(0.5, 0.5);
+      label.setDepth(6);
+      label.setAlpha(0.72);
+    }
   }
 
   tileToWorld(tileX, tileY) {

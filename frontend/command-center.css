@@ -612,3 +612,37 @@ tr:hover td { background: var(--bg-tertiary); }
   font-size: 0.85rem;
   font-style: italic;
 }
+.mcp-inline-config {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.mcp-inline-config-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.8rem;
+}
+.mcp-inline-config-field input,
+.mcp-inline-config-field textarea {
+  background: #121217;
+  color: #eee;
+  border: 1px solid #3a3a42;
+  border-radius: 8px;
+  padding: 0.55rem 0.65rem;
+  font-size: 0.8rem;
+}
+.mcp-inline-config-field textarea {
+  min-height: 88px;
+  resize: vertical;
+  line-height: 1.4;
+}
+.mcp-inline-config-field small {
+  color: #9ea7b5;
+  line-height: 1.35;
+}
+.mcp-inline-config-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}

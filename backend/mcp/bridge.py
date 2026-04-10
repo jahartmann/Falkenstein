@@ -15,9 +15,9 @@ from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from mcp import ClientSession, StdioServerParameters
-from mcp.client.stdio import stdio_client
 from backend.mcp.config import ServerStatus, ToolSchema
 from backend.mcp.registry import MCPRegistry
+from backend.mcp.filtered_stdio import filtered_stdio_client
 
 log = logging.getLogger(__name__)
 
@@ -201,11 +201,7 @@ class MCPBridge:
             capture = _StderrCapture(handle.stderr)
 
             try:
-                # errlog param added in newer MCP SDK versions
-                import inspect
-                _sig = inspect.signature(stdio_client)
-                _kw = {"errlog": capture} if "errlog" in _sig.parameters else {}
-                async with stdio_client(params, **_kw) as (read_stream, write_stream):
+                async with filtered_stdio_client(params, errlog=capture) as (read_stream, write_stream):
                     async with ClientSession(read_stream, write_stream) as session:
                         init_result = await session.initialize()
                         tools_result = await session.list_tools()
