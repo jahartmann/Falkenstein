@@ -135,9 +135,22 @@ class MCPBridge:
                                         last_error=None)
             self._emit_event("start_skipped_not_installed", server_id=server_id)
             return
+        # Check required config before attempting start
+        user_cfg = self.registry.get_user_config(server_id) if hasattr(self.registry, "get_user_config") else {}
+        missing = [
+            k for k in catalog_entry.get("requires_config", [])
+            if not user_cfg.get(k)
+        ]
+        if missing:
+            err = f"Missing config: {', '.join(missing)}"
+            self.registry.update_status(server_id, status="error", last_error=err)
+            self._emit_event("start_skipped_missing_config",
+                             server_id=server_id, missing=missing)
+            log.warning("MCP %s: skipped — %s", server_id, err)
+            return
+
         # Override cfg.command with resolved absolute path; build args + env
         cfg.command = str(binary)
-        user_cfg = self.registry.get_user_config(server_id) if hasattr(self.registry, "get_user_config") else {}
         cfg.args = self._build_args(server_id, catalog_entry, user_cfg)
         cfg.env = self._build_env(catalog_entry, user_cfg)
 

@@ -45,6 +45,27 @@ def test_create_mcp_tool_run_error():
     result = tool._run(title="Meeting")
     assert "Error" in result
 
+def test_create_mcp_tool_has_args_schema():
+    """Tools with input_schema properties should expose args_schema to CrewAI."""
+    bridge = MagicMock()
+    bridge.call_tool_threadsafe = MagicMock(return_value=ToolResult(success=True, output="ok"))
+    tool = create_mcp_tool(_sample_schema(), bridge)
+    schema = tool.args_schema
+    assert schema is not None
+    fields = schema.model_fields
+    assert "title" in fields
+    assert "due_date" in fields
+    # title is required, due_date is optional
+    assert fields["title"].is_required()
+    assert not fields["due_date"].is_required()
+
+def test_create_mcp_tool_no_schema_for_empty_properties():
+    """Tools without properties should still work (no args_schema override)."""
+    bridge = MagicMock()
+    schema = ToolSchema(name="ping", description="Ping", server_id="s", input_schema={})
+    tool = create_mcp_tool(schema, bridge)
+    assert isinstance(tool, BaseTool)
+
 def test_create_all_mcp_tools():
     schemas = [
         ToolSchema(name="tool_a", description="A", server_id="s1", input_schema={}),
